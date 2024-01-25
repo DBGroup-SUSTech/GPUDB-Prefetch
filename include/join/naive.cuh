@@ -69,7 +69,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
       if (val == r_key[next - 1]) {
         int32_t r_pl = r_payload[next - 1];
         o_payload[i] += r_pl + s_pl;  // TODO: aggregation or materialization?
-        break;
+        // break;
       }
 
       next = ht_link[next - 1];
