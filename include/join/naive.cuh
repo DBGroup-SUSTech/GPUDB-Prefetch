@@ -1,4 +1,6 @@
 #pragma once
+#include <fmt/format.h>
+
 #include "config.cuh"
 #include "util/util.cuh"
 
@@ -50,11 +52,9 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
 __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
                          int32_t* r_key, int32_t* r_payload, int32_t* ht_link,
                          int32_t* ht_slot, int32_t ht_size_log,
-                         int32_t* o_r_payload) {
+                         int32_t* o_payload) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
-
-  int aggr_local = 0;
 
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int stride = blockDim.x * gridDim.x;
@@ -69,7 +69,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
     while (next) {
       if (val == r_key[next - 1]) {
         int32_t r_pl = r_payload[next - 1];
-        o_r_payload[i] = r_pl;
+        o_payload[i] = r_pl + s_pl;
         break;
       }
 
@@ -79,7 +79,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
 }
 
 void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
-          int32_t* s_payload, int32_t s_n, int32_t* o_r_payload, Config cfg) {
+          int32_t* s_payload, int32_t s_n, int32_t* o_payload, Config cfg) {
   CHKERR(cudaDeviceReset());
 
   int32_t *d_r_key = nullptr, *d_r_payload = nullptr;
@@ -105,9 +105,9 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
   CHKERR(cutil::DeviceSet(d_ht_link, 0, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
 
-  int32_t* d_o_r_payload = nullptr;
-  CHKERR(cutil::DeviceAlloc(d_o_r_payload, s_n));
-  CHKERR(cutil::DeviceSet(d_o_r_payload, 0, s_n));
+  int32_t* d_o_payload = nullptr;
+  CHKERR(cutil::DeviceAlloc(d_o_payload, s_n));
+  CHKERR(cutil::DeviceSet(d_o_payload, 0, s_n));
 
   cudaEvent_t start_build, end_build, start_probe, end_probe;
   CHKERR(cudaEventCreate(&start_build));
@@ -136,7 +136,7 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
     probe_ht<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
         d_s_key, d_s_payload, s_n, d_r_key, d_r_payload, d_ht_link, d_ht_slot,
-        ht_size_log, d_o_r_payload);
+        ht_size_log, d_o_payload);
     CHKERR(
         cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
   }
@@ -157,7 +157,7 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
       ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
       s_n * 1.0 / ms_probe * 1000);
 
-  CHKERR(cutil::CpyDeviceToHost(o_r_payload, d_o_r_payload, s_n));
+  CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
   return;
 }
 }  // namespace naive
