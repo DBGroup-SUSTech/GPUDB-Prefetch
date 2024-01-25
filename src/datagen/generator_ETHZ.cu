@@ -12,7 +12,7 @@ All credit to the original author: Cagri Balkesen <cagri.balkesen@inf.ethz.ch>
 #include <ctime>
 
 #include "datagen/generator_ETHZ.cuh"
-namespace datagen{
+namespace datagen {
 #define RAND_RANGE(N) ((double)rand() / ((double)RAND_MAX + 1) * (N))
 #define RAND_RANGE48(N, STATE) \
   ((double)nrand48(STATE) / ((double)RAND_MAX + 1) * (N))
@@ -89,10 +89,10 @@ int create_relation_unique(const char *filename, int *relation,
                            uint64_t num_tuples, const int64_t maxid) {
   /*first try to read from a file*/
   // TODO donot read from file
-  // if (readFromFile(filename, relation, num_tuples)) {
-  random_unique_gen(relation, num_tuples, maxid);
-  // return writeToFile(filename, relation, num_tuples);
-  // }
+  if (readFromFile(filename, relation, num_tuples)) {
+    random_unique_gen(relation, num_tuples, maxid);
+    return writeToFile(filename, relation, num_tuples);
+  }
 
   return 0;
 }
@@ -238,13 +238,13 @@ void knuth_shuffle48(int *relation, uint64_t elsNum, unsigned short *state) {
 int create_relation_zipf(const char *filename, int *relation, uint64_t elsNum,
                          const int64_t maxid, const double zipf_param) {
   /*first try to read from a file*/
-  // if (readFromFile(filename, relation, elsNum)) {
-  check_seed();
+  if (readFromFile(filename, relation, elsNum)) {
+    check_seed();
 
-  gen_zipf(elsNum, maxid, zipf_param, relation);
+    gen_zipf(elsNum, maxid, zipf_param, relation);
 
-  // return writeToFile(filename, relation, elsNum);
-  // }
+    return writeToFile(filename, relation, elsNum);
+  }
   return 0;
 }
 
@@ -371,4 +371,4 @@ void gen_zipf(uint64_t stream_size, unsigned int alphabet_size,
   free(alphabet);
 }
 
-}
+}  // namespace datagen

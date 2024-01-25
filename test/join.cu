@@ -13,15 +13,14 @@ TEST(skew, naive) {
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
   assert(r_n <= s_n);
-
-  std::string r_fname = cutil::rel_fname(true, "r", r_n);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n);
-
+  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
+  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
-  assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
+  assert(
+      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
   assert(
       !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
 
@@ -44,8 +43,8 @@ TEST(skew, naive) {
   std::copy_n(r_key, r_n, r_payload);
   std::copy_n(s_key, s_n, s_payload);
 
-  fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 4;
   int threads_per_block = 512;

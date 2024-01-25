@@ -65,9 +65,9 @@ __device__ __forceinline__ void atomic_store(T *addr, T value) {
 
 namespace cutil {
 
-std::string rel_fname(bool unique, const char *rel, int32_t n) {
+std::string rel_fname(bool unique, const char *rel, int32_t n, double skew) {
   std::string flag = unique ? "unique" : "nonunique";
-  return fmt::format("data/{}_{}_{}.bin", flag, rel, n);
+  return fmt::format("data/{}_{}_{}_{}.bin", flag, rel, skew, n);
 }
 
 template <typename T, typename N>
