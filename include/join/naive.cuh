@@ -48,7 +48,7 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
 /// @param [in]     ht_link     R hash table link
 /// @param [in]     ht_slot     R hash table slot
 /// @param [in]     ht_size_log R hash table size = ht_size_log << 1
-/// @param [in]     o_r_payload output buffer for matched r's payload
+/// @param [in]     o_payload output buffer for matched r's payload
 __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
                          int32_t* r_key, int32_t* r_payload, int32_t* ht_link,
                          int32_t* ht_slot, int32_t ht_size_log,
