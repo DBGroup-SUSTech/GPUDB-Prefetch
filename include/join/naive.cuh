@@ -25,7 +25,7 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
                          int32_t* ht_slot, int32_t ht_size_log) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
-
+  // printf("build ht\n");
   // TODO: try vector
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int stride = blockDim.x * gridDim.x;
@@ -47,16 +47,19 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
 /// @param [in]     ht_link     R hash table link
 /// @param [in]     ht_slot     R hash table slot
 /// @param [in]     ht_size_log R hash table size = ht_size_log << 1
-/// @param [in]     o_payload output buffer for matched r's payload
+/// @param [in]     o_aggr      output aggregation results for matched r's
+/// payload
 __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
                          int32_t* r_key, int32_t* r_payload, int32_t* ht_link,
                          int32_t* ht_slot, int32_t ht_size_log,
-                         int32_t* o_payload) {
+                         int32_t* o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
   int stride = blockDim.x * gridDim.x;
+
+  int32_t aggr_local = 0;
 
   for (size_t i = tid; i < s_n; i += stride) {
     int32_t val = s_key[i];
@@ -68,17 +71,18 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
     while (next) {
       if (val == r_key[next - 1]) {
         int32_t r_pl = r_payload[next - 1];
-        o_payload[i] += r_pl + s_pl;  // TODO: aggregation or materialization?
+        aggr_fn_local(s_pl, r_pl, &aggr_local);
         // break;
       }
 
       next = ht_link[next - 1];
     }
   }
+  aggr_fn_global(aggr_local, o_aggr);
 }
 
-void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
-          int32_t* s_payload, int32_t s_n, int32_t* o_payload, Config cfg) {
+int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
+         int32_t* s_payload, int32_t s_n, Config cfg) {
   CHKERR(cudaDeviceReset());
 
   int32_t *d_r_key = nullptr, *d_r_payload = nullptr;
@@ -104,9 +108,13 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
   CHKERR(cutil::DeviceSet(d_ht_link, 0, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
 
-  int32_t* d_o_payload = nullptr;
-  CHKERR(cutil::DeviceAlloc(d_o_payload, s_n));
-  CHKERR(cutil::DeviceSet(d_o_payload, 0, s_n));
+  // int32_t* d_o_payload = nullptr;
+  // CHKERR(cutil::DeviceAlloc(d_o_payload, s_n));
+  // CHKERR(cutil::DeviceSet(d_o_payload, 0, s_n));
+
+  int32_t* d_aggr;
+  CHKERR(cutil::DeviceAlloc(d_aggr, 1));
+  CHKERR(cutil::DeviceSet(d_aggr, 0, 1));
 
   cudaEvent_t start_build, end_build, start_probe, end_probe;
   CHKERR(cudaEventCreate(&start_build));
@@ -120,6 +128,11 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
 
   CHKERR(cudaStreamCreate(&stream));
   CHKERR(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  fmt::print(
+      "Build: {} blocks * {} threads"
+      "Probe: {} blocks * {} threads\n",
+      cfg.build_blocksize, cfg.build_gridsize, cfg.probe_blocksize,
+      cfg.probe_gridsize);
 
   {
     CHKERR(
@@ -135,7 +148,7 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
     probe_ht<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
         d_s_key, d_s_payload, s_n, d_r_key, d_r_payload, d_ht_link, d_ht_slot,
-        ht_size_log, d_o_payload);
+        ht_size_log, d_aggr);
     CHKERR(
         cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
   }
@@ -156,8 +169,10 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
       ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
       s_n * 1.0 / ms_probe * 1000);
 
-  CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
-  return;
+  // CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
+  int32_t aggr;
+  CHKERR(cutil::CpyDeviceToHost(&aggr, d_aggr, 1));
+  return aggr;
 }
 }  // namespace naive
 }  // namespace join

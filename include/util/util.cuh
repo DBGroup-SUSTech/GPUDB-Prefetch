@@ -1,4 +1,5 @@
 #pragma once
+#include <fmt/format.h>
 #include <stdint.h>
 #include <stdio.h>
 #define CHKERR(call)                                          \
@@ -63,6 +64,18 @@ __device__ __forceinline__ void atomic_store(T *addr, T value) {
 }  // namespace gutil
 
 namespace cutil {
+
+std::string rel_fname(bool unique, const char *rel, int32_t n) {
+  std::string flag = unique ? "unique" : "nonunique";
+  return fmt::format("data/{}_{}_{}.bin", flag, rel, n);
+}
+
+template <typename T, typename N>
+std::string fmt_arr(T *arr, N n, bool sort = false) {
+  auto vec = std::vector<T>(arr, arr + n);
+  if (sort) std::sort(vec.begin(), vec.end());
+  return fmt::format("{}", fmt::join(vec, " "));
+}
 
 template <typename T>
 cudaError_t CpyDeviceToHost(T *dst, const T *src, size_t count) {
