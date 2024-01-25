@@ -5,7 +5,7 @@
 #include "util/util.cuh"
 
 // Non-partitioned Hash Join in Global Memory
-// Unique hash table
+// Non-Unique hash table
 // Late materialization
 // Output payloads to the location of input
 // 4byte-4byte table
@@ -32,7 +32,6 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
 
   for (size_t i = tid; i < r_n; i += stride) {
     // TODO: try other hash functions
-    // TODO: it is actually late materialization
     int32_t hval = r_key[i] & ht_mask;  // keys[i] % ht_size
     int32_t last = atomicExch(ht_slot + hval, i + 1);
     ht_link[i] = last;
@@ -69,7 +68,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
     while (next) {
       if (val == r_key[next - 1]) {
         int32_t r_pl = r_payload[next - 1];
-        o_payload[i] = r_pl + s_pl;
+        o_payload[i] += r_pl + s_pl;  // TODO: aggregation or materialization?
         break;
       }
 

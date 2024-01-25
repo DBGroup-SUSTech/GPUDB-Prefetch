@@ -11,9 +11,56 @@
     }                                                         \
   } while (0)
 
+namespace util {
+// dest >= src
+__host__ __device__ __forceinline__ void memmove_forward(void *dest,
+                                                         const void *src,
+                                                         size_t n) {
+  assert(dest > src);
+  if (n == 0) {
+    return;
+  }
+  uint8_t *dest_ = static_cast<uint8_t *>(dest);
+  const uint8_t *src_ = static_cast<const uint8_t *>(src);
+  do {
+    n--;
+    dest_[n] = src_[n];
+  } while (n > 0);
+}
+}  // namespace util
+
 namespace gutil {
 using ull_t = unsigned long long;
+
+// optimistic locks API
+__device__ __forceinline__ bool is_locked(ull_t version) {
+  return ((version & 0b10) == 0b10);
 }
+__device__ __forceinline__ bool is_obsolete(ull_t version) {
+  return ((version & 1) == 1);
+}
+
+template <typename T>
+__device__ __forceinline__ T atomic_load(const T *addr) {
+  const volatile T *vaddr = addr;  // volatile to bypass cache
+  __threadfence();  // for seq_cst loads. Remove for acquire semantics.
+  const T value = *vaddr;
+  // fence to ensure that dependent reads are correctly ordered
+  __threadfence();
+  return value;
+}
+
+// addr must be aligned properly.
+template <typename T>
+__device__ __forceinline__ void atomic_store(T *addr, T value) {
+  volatile T *vaddr = addr;  // volatile to bypass cache
+  // fence to ensure that previous non-atomic stores are visible to other
+  // threads
+  __threadfence();
+  *vaddr = value;
+}
+
+}  // namespace gutil
 
 namespace cutil {
 
