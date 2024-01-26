@@ -131,8 +131,8 @@ int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
   fmt::print(
       "Build: {} blocks * {} threads"
       "Probe: {} blocks * {} threads\n",
-      cfg.build_blocksize, cfg.build_gridsize, cfg.probe_blocksize,
-      cfg.probe_gridsize);
+      cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
+      cfg.probe_blocksize);
 
   {
     CHKERR(
