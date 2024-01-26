@@ -4,7 +4,10 @@
     "queue": "cpp",
     "stack": "cpp",
     "atomic": "cpp",
-    "cstdint": "cpp"
+    "cstdint": "cpp",
+    "chrono": "cpp",
+    "algorithm": "cpp",
+    "memory": "cpp"
   },
   "C_Cpp.clang_format_fallbackStyle": "Google"
 }

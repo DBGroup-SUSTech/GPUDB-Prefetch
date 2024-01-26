@@ -225,22 +225,24 @@ int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
       cfg.probe_blocksize);
 
   {
-    CHKERR(
-        cudaEventRecordWithFlags(start_build, stream, cudaEventRecordExternal));
+    CHKERR(cudaEventRecordWithFlags(  //
+        start_build, stream, cudaEventRecordExternal));
     build_ht<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
         d_r_key, r_n, d_ht_link, d_ht_slot, ht_size_log);
-    CHKERR(
-        cudaEventRecordWithFlags(end_build, stream, cudaEventRecordExternal));
+    CHKERR(cudaEventRecordWithFlags(  //
+        end_build, stream, cudaEventRecordExternal));
   }
 
   {
-    CHKERR(
-        cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
-    probe_ht<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
+    CHKERR(cudaEventRecordWithFlags(  //
+        start_probe, stream, cudaEventRecordExternal));
+    const int smem_size =
+        (PDIST + PADDING) * cfg.probe_blocksize * sizeof(int32_t);
+    probe_ht<<<cfg.probe_gridsize, cfg.probe_blocksize, smem_size, stream>>>(
         d_s_key, d_s_payload, s_n, d_r_key, d_r_payload, d_ht_link, d_ht_slot,
         ht_size_log, d_aggr);
-    CHKERR(
-        cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
+    CHKERR(cudaEventRecordWithFlags(  //
+        end_probe, stream, cudaEventRecordExternal));
   }
 
   CHKERR(cudaStreamEndCapture(stream, &graph));
