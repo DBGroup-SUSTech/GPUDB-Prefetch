@@ -14,7 +14,7 @@
 // uses bucket chain to solve conflict, bucket size = 1
 
 namespace join {
-namespace imv {
+namespace amac {
 
 /// @breif build hash table for R
 /// @param [in]     r_key       all keys of relation R
@@ -39,46 +39,8 @@ __global__ void build_ht(int32_t* r_key, int32_t r_n, int32_t* ht_link,
   }
 }
 
-/// @brief Use S to probe
-/// @param [in]     s_key       all keys of S
-/// @param [in]     s_payload   all payload of S
-/// @param [in]     s_n         number of S items
-/// @param [in]     r_key       all keys of R
-/// @param [in]     r_payload   all payload of R
-/// @param [in]     ht_link     R hash table link
-/// @param [in]     ht_slot     R hash table slot
-/// @param [in]     ht_size_log R hash table size = ht_size_log << 1
-/// @param [in]     o_payload output buffer for matched r's payload
-// __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
-//                          int32_t* r_key, int32_t* r_payload, int32_t*
-//                          ht_link, int32_t* ht_slot, int32_t ht_size_log,
-//                          int32_t* o_payload) {
-//   int ht_size = 1 << ht_size_log;
-//   int ht_mask = ht_size - 1;
-
-//   int tid = threadIdx.x + blockIdx.x * blockDim.x;
-//   int stride = blockDim.x * gridDim.x;
-
-//   for (size_t i = tid; i < s_n; i += stride) {
-//     int32_t val = s_key[i];
-//     int32_t hval = val & ht_mask;
-//     int32_t s_pl = s_payload[i];
-
-//     int32_t next = ht_slot[hval];
-
-//     while (next) {
-//       if (val == r_key[next - 1]) {
-//         int32_t r_pl = r_payload[next - 1];
-//         o_payload[i] += r_pl + s_pl;  // TODO: aggregation or
-//         materialization?
-//         // break;
-//       }
-
-//       next = ht_link[next - 1];
-//     }
-//   }
-// }
-
+// for prefetch
+// -----------------------------------------------------------------
 constexpr int PDIST = 32;   // prefetch distance & group size
 constexpr int PADDING = 1;  // solve bank conflict
 #define VSMEM(index) v[index + (PDIST + PADDING) * threadIdx.x]
@@ -115,6 +77,18 @@ struct prefetch_t {
   }
 };
 
+// ---------------------------------------------------------------------------
+
+/// @brief Use S to probe
+/// @param [in]     s_key       all keys of S
+/// @param [in]     s_payload   all payload of S
+/// @param [in]     s_n         number of S items
+/// @param [in]     r_key       all keys of R
+/// @param [in]     r_payload   all payload of R
+/// @param [in]     ht_link     R hash table link
+/// @param [in]     ht_slot     R hash table slot
+/// @param [in]     ht_size_log R hash table size = ht_size_log << 1
+/// @param [in]     o_aggr      output buffer for aggregation result
 __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
                          int32_t* r_key, int32_t* r_payload, int32_t* ht_link,
                          int32_t* ht_slot, int32_t ht_size_log,
@@ -194,9 +168,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
     }
     ++k;
   }
-
-  while (true) {
-  }
+  aggr_fn_global(aggr_local, o_aggr);
 }
 
 void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
@@ -281,5 +253,5 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
   CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
   return;
 }
-}  // namespace imv
+}  // namespace amac
 }  // namespace join

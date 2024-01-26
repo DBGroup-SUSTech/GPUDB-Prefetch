@@ -8,7 +8,6 @@
 #include "util/args.cuh"
 
 TEST(skew, naive) {
-  // TODO
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
