@@ -171,8 +171,8 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
-          int32_t* s_payload, int32_t s_n, int32_t* o_payload, Config cfg) {
+int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
+         int32_t* s_payload, int32_t s_n, Config cfg) {
   CHKERR(cudaDeviceReset());
 
   int32_t *d_r_key = nullptr, *d_r_payload = nullptr;
@@ -198,9 +198,13 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
   CHKERR(cutil::DeviceSet(d_ht_link, 0, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
 
-  int32_t* d_o_payload = nullptr;
-  CHKERR(cutil::DeviceAlloc(d_o_payload, s_n));
-  CHKERR(cutil::DeviceSet(d_o_payload, 0, s_n));
+  // int32_t* d_o_payload = nullptr;
+  // CHKERR(cutil::DeviceAlloc(d_o_payload, s_n));
+  // CHKERR(cutil::DeviceSet(d_o_payload, 0, s_n));
+
+  int32_t* d_aggr;
+  CHKERR(cutil::DeviceAlloc(d_aggr, 1));
+  CHKERR(cutil::DeviceSet(d_aggr, 0, 1));
 
   cudaEvent_t start_build, end_build, start_probe, end_probe;
   CHKERR(cudaEventCreate(&start_build));
@@ -214,6 +218,11 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
 
   CHKERR(cudaStreamCreate(&stream));
   CHKERR(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  fmt::print(
+      "Build: {} blocks * {} threads"
+      "Probe: {} blocks * {} threads\n",
+      cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
+      cfg.probe_blocksize);
 
   {
     CHKERR(
@@ -229,7 +238,7 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
     probe_ht<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
         d_s_key, d_s_payload, s_n, d_r_key, d_r_payload, d_ht_link, d_ht_slot,
-        ht_size_log, d_o_payload);
+        ht_size_log, d_aggr);
     CHKERR(
         cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
   }
@@ -250,8 +259,10 @@ void join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
       ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
       s_n * 1.0 / ms_probe * 1000);
 
-  CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
-  return;
+  // CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
+  int32_t aggr;
+  CHKERR(cutil::CpyDeviceToHost(&aggr, d_aggr, 1));
+  return aggr;
 }
 }  // namespace amac
 }  // namespace join
