@@ -20,6 +20,24 @@ typedef enum state_t
     Done,
 } state_t;
 
+struct prefetch_t
+{
+    int pending = 0; // number of pending requests
+    __device__ __forceinline__ void commit(void *__restrict__ dst_shared, const void *__restrict__ src_global,
+                                           size_t size_and_align, size_t zfill = 0UL)
+    {
+        __pipeline_memcpy_async(dst_shared, src_global, size_and_align, zfill);
+        __pipeline_commit();
+        ++pending;
+    }
+    __device__ __forceinline__ void wait()
+    {
+        assert(pending);
+        __pipeline_wait_prior(pending - 1);
+        --pending;
+    }
+};
+
 // Non-partitioned Hash Join in Global Memory
 // Unique hash table
 // Late materialization
@@ -97,6 +115,8 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
 
     int aggr_local = 0;
 
+    prefetch_t pref{};
+
     for (size_t i = tid; i < s_n; i += stride * G)
     {
         // reset the registers
@@ -116,8 +136,7 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
             // calculate slot_num
             int slot_num = reg_s_key[j] & ht_mask;
 #ifdef PREFETCH
-            __pipeline_memcpy_async(&shared_buffer[shared_buffer_idx], &ht_slot[slot_num], sizeof(int32_t));
-            __pipeline_commit();
+            pref.commit(&shared_buffer[shared_buffer_idx], &ht_slot[slot_num], sizeof(int32_t));
 #else
             memcpy(&shared_buffer[shared_buffer_idx], &ht_slot[slot_num], sizeof(int32_t));
 #endif
@@ -137,7 +156,7 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
 
 #ifdef PREFETCH
                     // TODO
-                    __pipeline_wait_prior(0);
+                    pref.wait();
 #endif
                     reg_r_tuple_id[j] = shared_buffer[shared_buffer_idx] - 1;
                     if (reg_r_tuple_id[j] == -1)
@@ -148,9 +167,7 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
                     else
                     {
 #ifdef PREFETCH
-                        __pipeline_memcpy_async(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[j]],
-                                                sizeof(int32_t));
-                        __pipeline_commit();
+                        pref.commit(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[j]], sizeof(int32_t));
 #else
                         memcpy(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
@@ -169,18 +186,14 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
                 case MATCH:
                     s_tuple_id = i + j * stride;
                     shared_buffer_idx = blockDim.x * j + threadIdx.x;
-                    // TODO:
 #ifdef PREFETCH
-                    // TODO
-                    __pipeline_wait_prior(0);
+                    pref.wait();
 #endif
                     reg_r_key = shared_buffer[shared_buffer_idx];
                     if (reg_r_key == reg_s_key[j])
                     {
 #ifdef PREFETCH
-                        __pipeline_memcpy_async(&shared_buffer[shared_buffer_idx], &r_payload[reg_r_tuple_id[j]],
-                                                sizeof(int32_t));
-                        __pipeline_commit();
+                        pref.commit(&shared_buffer[shared_buffer_idx], &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
 #else
                         memcpy(&shared_buffer[shared_buffer_idx], &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
@@ -189,9 +202,7 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
                     else
                     {
 #ifdef PREFETCH
-                        __pipeline_memcpy_async(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]],
-                                                sizeof(int32_t));
-                        __pipeline_commit();
+                        pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
 #else
                         memcpy(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
@@ -210,16 +221,14 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
                 case PAYLOAD:
                     shared_buffer_idx = blockDim.x * j + threadIdx.x;
 #ifdef PREFETCH
-                    // TODO:
-                    __pipeline_wait_prior(0);
+                    pref.wait();
 #endif
                     reg_r_payload = shared_buffer[shared_buffer_idx];
                     printf("%d, %d \n", reg_s_payload[j], reg_r_payload);
                     aggr_fn_local(reg_s_payload[j], reg_r_payload, &aggr_local);
 #ifdef PREFETCH
-                    __pipeline_memcpy_async(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]],
-                                            sizeof(int32_t));
-                    __pipeline_commit();
+                    pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
+
 #else
                     memcpy(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
