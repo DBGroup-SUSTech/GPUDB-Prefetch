@@ -1,17 +1,15 @@
 #pragma once
-#include <cuda_pipeline.h>
-
+#include "config.cuh"
+#include "util/util.cuh"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cuda_pipeline.h>
 #include <fstream>
-
-#include "config.cuh"
-#include "util/util.cuh"
 
 #define G 8
 #define EARLY_AGGREGATE
-#define PREFETCH
+#define PREFETCHF
 
 typedef enum state_t {
   HASH,
@@ -22,7 +20,7 @@ typedef enum state_t {
 } state_t;
 
 struct prefetch_t {
-  int pending = 0;  // number of pending requests
+  int pending = 0; // number of pending requests
   __device__ __forceinline__ void commit(void *__restrict__ dst_shared,
                                          const void *__restrict__ src_global,
                                          size_t size_and_align,
@@ -66,7 +64,7 @@ __global__ void build_ht(int32_t *r_key, int32_t r_n, int32_t *ht_link,
   for (size_t i = tid; i < r_n; i += stride) {
     // TODO: try other hash functions
     // TODO: it is actually late materialization
-    int32_t hval = r_key[i] & ht_mask;  // keys[i] % ht_size
+    int32_t hval = r_key[i] & ht_mask; // keys[i] % ht_size
     int32_t last = atomicExch(ht_slot + hval, i + 1);
     ht_link[i] = last;
   }
@@ -97,10 +95,10 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n,
   int32_t reg_r_tuple_id[G];
   // initial state is 0
   state_t reg_state[G];
-  //   int32_t reg_r_key = -1;
-  //   int32_t reg_r_payload = -1;
+  int32_t reg_r_key = -1;
+  int32_t reg_r_payload = -1;
 
-  //   int32_t finish_match_num = 0;
+  int32_t finish_match_num = 0;
 
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
@@ -120,8 +118,8 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n,
     int32_t reg_r_payload = -1;
     int32_t finish_match_num = 0;
 #pragma unroll
-    for (size_t j = 0; j < G; j++)  // code 0, access s's key and payload, and
-                                    // calculate the slot_num.
+    for (size_t j = 0; j < G;
+         j++) // code 0, access s's key and payload, and calculate the slot_num.
     {
       // set the state to HASH
       reg_state[j] = HASH;
@@ -150,94 +148,94 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n,
       for (size_t j = 0; j < G; j++) {
         s_tuple_id = i + j * stride;
         switch (reg_state[j]) {
-          case NEXT:
-            shared_buffer_idx = blockDim.x * j + threadIdx.x;
+        case NEXT:
+          shared_buffer_idx = blockDim.x * j + threadIdx.x;
 #ifdef PREFETCH
-            // TODO
-            pref.wait();
+          // TODO
+          pref.wait();
 #endif
-            reg_r_tuple_id[j] = shared_buffer[shared_buffer_idx] - 1;
-            if (reg_r_tuple_id[j] == -1) {
-              finish_match_num++;
-              reg_state[j] = Done;
-            } else {
-#ifdef PREFETCH
-              pref.commit(&shared_buffer[shared_buffer_idx],
-                          &r_key[reg_r_tuple_id[j]], sizeof(int32_t));
-#else
-              memcpy(&shared_buffer[shared_buffer_idx],
-                     &r_key[reg_r_tuple_id[j]], sizeof(int32_t));
-#endif
-              reg_state[j] = MATCH;
-            }
-            break;
-          // if block in code 0(s_tuple_id >= s_n)
-          case HASH:
+          reg_r_tuple_id[j] = shared_buffer[shared_buffer_idx] - 1;
+          if (reg_r_tuple_id[j] == -1) {
             finish_match_num++;
             reg_state[j] = Done;
-          default:
-            break;
+          } else {
+#ifdef PREFETCH
+            pref.commit(&shared_buffer[shared_buffer_idx],
+                        &r_key[reg_r_tuple_id[j]], sizeof(int32_t));
+#else
+            memcpy(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[j]],
+                   sizeof(int32_t));
+#endif
+            reg_state[j] = MATCH;
+          }
+          break;
+        // if block in code 0(s_tuple_id >= s_n)
+        case HASH:
+          finish_match_num++;
+          reg_state[j] = Done;
+        default:
+          break;
         }
       }
 #pragma unroll
       for (size_t j = 0; j < G; j++) {
         s_tuple_id = i + j * stride;
         switch (reg_state[j]) {
-          case MATCH:
-            shared_buffer_idx = blockDim.x * j + threadIdx.x;
+        case MATCH:
+          shared_buffer_idx = blockDim.x * j + threadIdx.x;
 
 #ifdef PREFETCH
-            pref.wait();
+          pref.wait();
 #endif
-            reg_r_key = shared_buffer[shared_buffer_idx];
-            if (reg_r_key == reg_s_key[j]) {
+          reg_r_key = shared_buffer[shared_buffer_idx];
+          if (reg_r_key == reg_s_key[j]) {
 #ifdef PREFETCH
-              pref.commit(&shared_buffer[shared_buffer_idx],
-                          &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
+            pref.commit(&shared_buffer[shared_buffer_idx],
+                        &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
 #else
-              memcpy(&shared_buffer[shared_buffer_idx],
-                     &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
+            memcpy(&shared_buffer[shared_buffer_idx],
+                   &r_payload[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
-              reg_state[j] = PAYLOAD;
-            } else {
-#ifdef PREFETCH
-              pref.commit(&shared_buffer[shared_buffer_idx],
-                          &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
-#else
-              memcpy(&shared_buffer[shared_buffer_idx],
-                     &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
-#endif
-              reg_state[j] = NEXT;
-            }
-            break;
-          default:
-            break;
-        }
-      }
-#pragma unroll
-      for (size_t j = 0; j < G; j++) {
-        s_tuple_id = i + j * stride;
-        switch (reg_state[j]) {
-          case PAYLOAD:
-            shared_buffer_idx = blockDim.x * j + threadIdx.x;
-#ifdef PREFETCH
-            pref.wait();
-#endif
-            reg_r_payload = shared_buffer[shared_buffer_idx];
-            // printf("%d, %d \n", reg_s_payload[j], reg_r_payload);
-            aggr_fn_local(reg_s_payload[j], reg_r_payload, &aggr_local);
+            reg_state[j] = PAYLOAD;
+          } else {
 #ifdef PREFETCH
             pref.commit(&shared_buffer[shared_buffer_idx],
                         &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
-
 #else
             memcpy(&shared_buffer[shared_buffer_idx],
                    &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
 #endif
             reg_state[j] = NEXT;
-            break;
-          default:
-            break;
+          }
+          break;
+        default:
+          break;
+        }
+      }
+#pragma unroll
+      for (size_t j = 0; j < G; j++) {
+        s_tuple_id = i + j * stride;
+        switch (reg_state[j]) {
+        case PAYLOAD:
+          shared_buffer_idx = blockDim.x * j + threadIdx.x;
+#ifdef PREFETCH
+          pref.wait();
+#endif
+          reg_r_payload = shared_buffer[shared_buffer_idx];
+          // printf("%d, %d \n", reg_s_payload[j], reg_r_payload);
+          aggr_fn_local(reg_s_payload[j], reg_r_payload, &aggr_local);
+#ifdef PREFETCH
+          pref.commit(&shared_buffer[shared_buffer_idx],
+                      &ht_link[reg_r_tuple_id[j]], sizeof(int32_t));
+
+#else
+          memcpy(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[j]],
+                 sizeof(int32_t));
+#endif
+          reg_state[j] = NEXT;
+          break;
+        default:
+          break;
         }
       }
     }
@@ -292,11 +290,10 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
 
   CHKERR(cudaStreamCreate(&stream));
   CHKERR(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  fmt::print(
-      "Build: {} blocks * {} threads"
-      "Probe: {} blocks * {} threads\n",
-      cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
-      cfg.probe_blocksize);
+  fmt::print("Build: {} blocks * {} threads"
+             "Probe: {} blocks * {} threads\n",
+             cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
+             cfg.probe_blocksize);
 
   {
     CHKERR(
@@ -327,17 +324,16 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cudaEventElapsedTime(&ms_build, start_build, end_build));
   CHKERR(cudaEventElapsedTime(&ms_probe, start_probe, end_probe));
 
-  fmt::print(
-      "Join GP (bucket size = 1)\n"
-      "[build(R), {} ms, {} tps (S)]\n"
-      "[probe(S), {} ms, {} tps (R)]\n",
-      ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
-      s_n * 1.0 / ms_probe * 1000);
+  fmt::print("Join GP (bucket size = 1)\n"
+             "[build(R), {} ms, {} tps (S)]\n"
+             "[probe(S), {} ms, {} tps (R)]\n",
+             ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
+             s_n * 1.0 / ms_probe * 1000);
 
   // CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
   int32_t aggr;
   CHKERR(cutil::CpyDeviceToHost(&aggr, d_aggr, 1));
   return aggr;
 }
-}  // namespace gp
-}  // namespace join
+} // namespace gp
+} // namespace join
