@@ -7,7 +7,7 @@ namespace classicjoin {
 namespace amac {
 
 struct ConfigAMAC : public Config {
-  int method = 1;  // three prefetch methods
+  int method = 4;  // three prefetch methods
 };
 
 // TODO: use prefetch in build_ht
@@ -38,9 +38,9 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
 }
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;    // prefetch distance & group size
-constexpr int PADDING = 1;  // solve bank conflict
-// constexpr int WARPS_PER_THREAD = 128;  // warps per thread
+constexpr int PDIST = 8;                // prefetch distance & group size
+constexpr int PADDING = 1;              // solve bank conflict
+constexpr int THREADS_PER_BLOCK = 128;  // warps per thread
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
 
 // TODO: fsm_shared
@@ -60,6 +60,12 @@ struct fsm_t {
   Tuple s_tuple;  // 8 Byte
   Entry *next;    // 8 Byte
   state_t state;  // 4 Byte
+};
+
+struct fsm_shared_t {
+  Tuple s_tuple[THREADS_PER_BLOCK];
+  Entry *next[THREADS_PER_BLOCK];
+  state_t state[THREADS_PER_BLOCK];
 };
 
 /// @brief
@@ -134,6 +140,83 @@ __launch_bounds__(128, 1)  //
 
         fsm[k].state = state_t::NEXT;
         pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
+
+        break;
+      }
+    }
+    ++k;
+  }
+
+  aggr_fn_global(aggr_local, o_aggr);
+}
+
+__launch_bounds__(128, 1)  //
+    __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
+                                    int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  extern __shared__ uint64_t v[];  // prefetch buffer
+
+  __shared__ fsm_shared_t fsm[PDIST];
+  for (int k = 0; k < PDIST; ++k) fsm[k].state[threadIdx.x] = state_t::HASH;
+
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+
+  int aggr_local = 0;
+
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+
+    switch (fsm[k].state[threadIdx.x]) {
+      case state_t::HASH: {
+        if (i < s_n) {
+          fsm[k].state[threadIdx.x] = state_t::NEXT;
+
+          fsm[k].s_tuple[threadIdx.x] = s[i];
+          i += stride;
+          int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+          // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
+          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+
+        } else {
+          fsm[k].state[threadIdx.x] = state_t::DONE;
+          ++all_done;
+        }
+
+        break;
+      }
+
+      case state_t::NEXT: {
+        pref.wait();
+        fsm[k].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(k));
+        if (fsm[k].next[threadIdx.x]) {
+          fsm[k].state[threadIdx.x] = state_t::MATCH;
+          pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8);
+
+        } else {
+          fsm[k].state[threadIdx.x] = state_t::HASH;
+          --k;  // fill it with new item, or the bandwidth may be underutilized
+        }
+
+        break;
+      }
+
+      case state_t::MATCH: {
+        pref.wait();
+        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
+
+        if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
+          aggr_fn_local(r_tuple->v, fsm[k].s_tuple[threadIdx.x].v, &aggr_local);
+        }
+
+        fsm[k].state[threadIdx.x] = state_t::NEXT;
+        pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
 
         break;
       }
@@ -287,9 +370,10 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cudaStreamCreate(&stream));
   CHKERR(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   fmt::print(
-      "Build: {} blocks * {} threads"
+      "use method {}\n"
+      "Build: {} blocks * {} threads\n"
       "Probe: {} blocks * {} threads\n",
-      cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
+      cfg.method, cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
       cfg.probe_blocksize);
 
   {
@@ -316,6 +400,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
                    stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+    } else if (cfg.method == 4) {
+      const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
+                        stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else {
       assert(0);
     }
