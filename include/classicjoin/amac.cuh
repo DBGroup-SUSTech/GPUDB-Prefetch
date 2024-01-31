@@ -69,8 +69,9 @@ struct fsm_t {
 /// @param ht_size_log log2(htsize)
 /// @param entries     hash table entries
 /// @return
-__global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
-                           int ht_size_log, int *o_aggr) {
+__launch_bounds__(128, 1)  //
+    __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
+                               int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
@@ -147,7 +148,89 @@ __global__ void probe_ht_2(Tuple *s, int s_n, EntryHeader *ht_slot,
                            int ht_size_log, int *o_aggr);
 
 __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
-                           int ht_size_log, int *o_aggr);
+                           int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  extern __shared__ uint64_t v[];  // prefetch buffer
+
+  fsm_t fsm[PDIST]{};
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+
+  int aggr_local = 0;
+
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+
+    switch (fsm[k].state) {
+      case state_t::HASH: {
+        if (i < s_n) {
+          fsm[k].state = state_t::NEXT;
+
+          fsm[k].s_tuple = s[i];
+          i += stride;
+          int hval = fsm[k].s_tuple.k & ht_mask;
+          // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
+          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+
+        } else {
+          fsm[k].state = state_t::DONE;
+          ++all_done;
+        }
+
+        break;
+      }
+
+      case state_t::NEXT: {
+        pref.wait();
+        fsm[k].next = reinterpret_cast<Entry *>(VSMEM(k));
+        if (fsm[k].next) {
+          fsm[k].state = state_t::MATCH;
+          pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
+
+        } else {
+          fsm[k].state = state_t::HASH;
+          --k;  // fill it with new item, or the bandwidth may be underutilized
+        }
+
+        break;
+      }
+
+      case state_t::MATCH: {
+        pref.wait();
+        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
+
+        if (r_tuple->k == fsm[k].s_tuple.k) {
+          aggr_fn_local(r_tuple->v, fsm[k].s_tuple.v, &aggr_local);
+        }
+
+        // DO NOT PREFTECH
+        fsm[k].next = fsm[k].next->header.next;  // should already in cache
+
+        if (fsm[k].next) {
+          fsm[k].state = state_t::MATCH;
+          pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
+        } else {
+          fsm[k].state = state_t::HASH;
+          --k;
+        }
+
+        // fsm[k].state = state_t::NEXT;
+        // pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
+
+        break;
+      }
+    }
+    ++k;
+  }
+
+  aggr_fn_global(aggr_local, o_aggr);
+}
 
 // __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
 //   for (int i = 0; i < n; ++i) {
@@ -227,6 +310,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_1<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
+                   stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+    } else if (cfg.method == 3) {
+      const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
                    stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else {
       assert(0);
