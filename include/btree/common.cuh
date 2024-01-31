@@ -7,13 +7,17 @@
 namespace btree {
 struct Node {
   enum class Type : int { NONE = 0, INNER, LEAF };
-  Type type;
-
   gutil::ull_t version_lock_obsolete;
+  Type type;
 
   // optimistic lock
   __device__ __forceinline__ gutil::ull_t read_lock_or_restart(
       bool &need_restart) const {
+    if (((uint64_t)&version_lock_obsolete) % 8 != 0) {
+      // TODO
+      printf("misaligned version of node %p\n", this);
+      assert(0);
+    }
     gutil::ull_t version;
     version = gutil::atomic_load(&version_lock_obsolete);
     if (gutil::is_locked(version) || gutil::is_obsolete(version)) {
@@ -69,7 +73,7 @@ struct InnerNode : public Node {
     int upper = n_key;
     while (lower < upper) {
       int mid = (upper - lower) / 2 + lower;
-      int cmp = key - keys[mid];
+      int cmp = util::scalar_cmp(key, keys[mid]);
       if (cmp < 0) {
         upper = mid;
       } else if (cmp > 0) {
@@ -92,7 +96,7 @@ struct InnerNode : public Node {
     // copy n keys and n + 1 childs
     memcpy(new_inner->keys, keys + n_key + 1, sizeof(int) * new_inner->n_key);
     memcpy(new_inner->children, children + n_key + 1,
-           sizeof(int) * (new_inner->n_key + 1));
+           sizeof(Node *) * (new_inner->n_key + 1));
     return new_inner;
   }
 
@@ -103,9 +107,13 @@ struct InnerNode : public Node {
                           sizeof(int) * (n_key - pos));
     util::memmove_forward(children + pos + 1, children + pos,
                           sizeof(Node *) * (n_key + 1 - pos));
+    assert(pos < MAX_ENTRIES);
     keys[pos] = key;
     children[pos] = child;
 
+    // printf("children %p\n", children);
+    assert(pos < MAX_ENTRIES && pos >= 0);
+    assert(((uint64_t)children) % 8 == 0);
     auto tmp = children[pos];
     children[pos] = children[pos + 1];
     children[pos + 1] = tmp;
@@ -133,7 +141,7 @@ struct LeafNode : public Node {
       // printf("lower=%d, upper=%d, n_key=%d\n", lower, upper, n_key);
       int mid = (upper - lower) / 2 + lower;
       // int cmp = util::bytes_cmp(key, key_size, keys[mid], keys_sizes[mid]);
-      int cmp = key - keys[mid];
+      int cmp = util::scalar_cmp(key, keys[mid]);
       if (cmp < 0) {
         upper = mid;
       } else if (cmp > 0) {
@@ -149,7 +157,6 @@ struct LeafNode : public Node {
       int &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
     LeafNode *new_leaf = node_allocator.malloc<LeafNode>();
     new_leaf->type = Node::Type::LEAF;
-
     new_leaf->n_key = n_key / 2;
     n_key = n_key - new_leaf->n_key;
 
@@ -184,4 +191,32 @@ struct LeafNode : public Node {
     n_key++;
   }
 };
-}  // namespace index
+
+__global__ void allocate_root(Node **root_p) {
+  assert(blockDim.x == 1 && gridDim.x == 1);
+  LeafNode *root = new LeafNode{};
+  root->type = Node::Type::LEAF;
+  *root_p = root;
+}
+
+class BTree {
+ public:
+  Node **d_root_p_;
+  DynamicAllocator<ALLOC_CAPACITY> allocator_;
+
+ public:
+  BTree() {
+    CHKERR(cutil::DeviceAlloc(d_root_p_, 1));
+    allocate_root<<<1, 1>>>(d_root_p_);
+    CHKERR(cudaDeviceSynchronize());
+  }
+};
+
+struct Config {
+  int build_gridsize = -1;
+  int build_blocksize = -1;
+  int probe_gridsize = -1;
+  int probe_blocksize = -1;
+};
+
+}  // namespace btree

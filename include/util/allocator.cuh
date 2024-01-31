@@ -1,6 +1,6 @@
 #include "util/util.cuh"
 
-#define ALLOC_CAPACITY ((uint64_t(1) << 32))  // 4GB for node
+#define ALLOC_CAPACITY ((uint64_t(1) << 33))  // 8GB for node
 
 // capacity aligned to 4 bytes
 template <uint64_t CAPACITY>

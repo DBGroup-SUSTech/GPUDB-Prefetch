@@ -93,7 +93,7 @@ TEST(unique, imv) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
+      "using unique keys, skew = {}\n",
       s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));

@@ -13,6 +13,15 @@
   } while (0)
 
 namespace util {
+template <typename T>
+__host__ __device__ __forceinline__ int scalar_cmp(T l, T r) {
+  if (l == r)
+    return 0;
+  else if (l > r)
+    return 1;
+  else
+    return -1;
+}
 // dest >= src
 __host__ __device__ __forceinline__ void memmove_forward(void *dest,
                                                          const void *src,

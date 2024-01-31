@@ -2,12 +2,6 @@
 #include "btree/common.cuh"
 
 namespace btree {
-__global__ void allocate_root(Node **root_p) {
-  assert(blockDim.x == 1 && gridDim.x == 1);
-  LeafNode *root = new LeafNode{};
-  root->type = Node::Type::LEAF;
-  *root_p = root;
-}
 
 __device__ __forceinline__ void put_olc(
     int key, int value, Node **root_p,
@@ -24,7 +18,6 @@ restart:
 
   while (node->type == Node::Type::INNER) {
     InnerNode *inner = static_cast<InnerNode *>(node);
-
     // split preemptively if full
     if (inner->is_full()) {
       // lock parent and current
@@ -49,7 +42,7 @@ restart:
         parent->insert(sep, new_inner);
       } else {
         // make_root
-        InnerNode *new_root = new InnerNode{};
+        InnerNode *new_root = node_allocator.malloc<InnerNode>();
         new_root->type = Node::Type::INNER;
 
         new_root->n_key = 1;
@@ -75,14 +68,15 @@ restart:
     parent = inner;
     parent_v = v;
 
-    node = inner->children[inner->lower_bound(key)];
+    // printf("inner.children %p\n", inner->children);
+    int pos = inner->lower_bound(key);
+    node = inner->children[pos];
     /// @note check_or_restart()'s usage:
     ///   1. The correctness can be achieved without check_or_restart()
     ///   2. check_or_restart() avoids reading illigal memory. The program
     ///      cannot pass sanitizer without check_or_restart()
-
-    // inner->check_or_restart(v, need_restart);
-    // if (need_restart) goto restart;
+    inner->check_or_restart(v, need_restart);
+    if (need_restart) goto restart;
 
     v = node->read_lock_or_restart(need_restart);
     if (need_restart) goto restart;
@@ -90,6 +84,7 @@ restart:
 
   // split leaf if full
   LeafNode *leaf = static_cast<LeafNode *>(node);
+
   if (leaf->is_full()) {
     // lock parent and current
     if (parent) {
@@ -114,7 +109,7 @@ restart:
       parent->insert(sep, new_leaf);
     } else {
       // make root
-      InnerNode *new_root = new InnerNode{};
+      InnerNode *new_root = node_allocator.malloc<InnerNode>();
       new_root->type = Node::Type::INNER;
 
       new_root->n_key = 1;
@@ -149,17 +144,21 @@ restart:
 
 __global__ void puts_olc(int *keys, int *values, int n, Node **root_p,
                          DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
-  int wid = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+  // int wid = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
 
-  if (wid >= n) {
-    return;
-  }
-  int lid_w = threadIdx.x % 32;
-  if (lid_w > 0) {  // TODO: warp sharing
-    return;
-  }
+  // if (wid >= n) {
+  //   return;
+  // }
+  // int lid_w = threadIdx.x % 32;
+  // if (lid_w > 0) {
+  //   return;
+  // }
 
-  put_olc(keys[wid], values[wid], root_p, node_allocator);
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+  for (int i = tid; i < n; i += stride) {
+    put_olc(keys[i], values[i], root_p, node_allocator);
+  }
 }
 
-}  // namespace index
+}  // namespace btree
