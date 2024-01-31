@@ -33,6 +33,12 @@ __host__ __device__ __forceinline__ void memmove_forward(void *dest,
 namespace gutil {
 using ull_t = unsigned long long;
 
+template <typename T>
+__device__ __forceinline__ T atomic_exch_64(T *address, T val) {
+  return reinterpret_cast<T>(atomicExch(reinterpret_cast<ull_t *>(address),
+                                        reinterpret_cast<ull_t>(val)));
+}
+
 // optimistic locks API
 __device__ __forceinline__ bool is_locked(ull_t version) {
   return ((version & 0b10) == 0b10);

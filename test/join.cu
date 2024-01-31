@@ -49,9 +49,9 @@ TEST(skew, imv) {
   // int els_per_thread = 4;
   // int threads_per_block = 512;
   join::Config config;
-  config.build_gridsize = 1;
+  config.build_gridsize = 128;
   config.build_blocksize = 128;
-  config.probe_gridsize = 1;
+  config.probe_gridsize = 128;
   config.probe_blocksize = 128;
   // {  // build kernel
   //   const int els_per_block = threads_per_block * els_per_thread;

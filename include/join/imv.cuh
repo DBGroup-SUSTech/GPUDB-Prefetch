@@ -52,10 +52,10 @@ constexpr unsigned int MASK_ALL_LANES = 0xFFFFFFFF;
 enum class state_t {
   HASH = 0,  // load s_key, s_payload, then hash, prefetch bucket header (next =
              // ht_slot[hash])
-  NEXT,      // load next, prefetch r_key[next]
-  MATCH,     // load r_key[next], matching, and prefetch r_payload[next]
-  PAYLOAD,   // load r_payload[next], aggregation, prefetch r_key[next]
-  DONE,
+  NEXT = 1,  // load next, prefetch r_key[next]
+  MATCH = 2,    // load r_key[next], matching, and prefetch r_payload[next]
+  PAYLOAD = 3,  // load r_payload[next], aggregation, prefetch r_key[next]
+  DONE = 4,
 };
 
 struct fsm_t {
@@ -69,7 +69,8 @@ struct fsm_shared_t {
   int32_t s_key[32 * WARPS_PER_THREAD];
   int32_t s_payload[32 * WARPS_PER_THREAD];
   int32_t next[32 * WARPS_PER_THREAD];
-  // state_t state; // leave it outside
+  state_t state;  // leave it outside
+  bool active;
 };
 
 struct prefetch_t {
@@ -126,7 +127,8 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
   // __shared__ fsm_t RVS{};  // TODO: vector<key,payload,next> + scalar<state>
 
   __shared__ fsm_shared_t fsm[PDIST];  // TODO: DVS, save in register instead
-  state_t fsm_state[PDIST];            // state flag stored in register
+  // state_t fsm_state[PDIST];            // state flag stored in register
+  // bool active[PDIST];                  // each vector is active or not
 
   __shared__ fsm_shared_t RVS_next;    // RVS after next
   __shared__ fsm_shared_t RVS_match0;  // RVS after unmatch
@@ -138,14 +140,16 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
   int RVS_match1_cnt = 0;
   bool DVS_match0_full = false;
 
-  bool active = 0;
+  // bool active = 0;
   int all_done = 0, k = 0;
   int32_t aggr_local = 0;
 
   // cache
   while (all_done < PDIST) {
     k = ((k == PDIST) ? 0 : k);
-    switch (fsm_state[k]) {
+    // if (warplane == 0) printf("state = %d\n", fsm[k].state);
+
+    switch (fsm[k].state) {
       case state_t::HASH: {
         if (i < s_n) {
           // TODO: sequential read, no prefetch
@@ -156,19 +160,25 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
           int32_t hval = s_key_v & ht_mask;  // v_hash
           i += stride;                       // read next vector
 
+          // if (threadIdx.x == 0)
+          //   printf("tid=%d: key = %d, hval = %d, ht_slot = %d\n",
+          //   threadIdx.x,
+          //          s_key_v, hval, ht_slot[hval]);
+
           pref.commit(&VSMEM(k), &ht_slot[hval], sizeof(int32_t));
-          active = 1;
+          fsm[k].active = 1;
         } else {
           ++all_done;
-          active = 0;
+          fsm[k].active = 0;
         }
 
-        fsm_state[k] = state_t::NEXT;
+        fsm[k].state = state_t::NEXT;
 
         break;
       }
       case state_t::NEXT: {
         int next = 0;
+        bool active = fsm[k].active;
 
         if (active) {
           pref.wait();
@@ -181,6 +191,14 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
         // active = active && (next != 0);
         int active_mask = __ballot_sync(MASK_ALL_LANES, active);
         int active_cnt = __popc(active_mask);
+
+        // if (threadIdx.x == 0)
+        //   printf(
+        //       "tid=%d, key=%d, active_cnt=%d, active=%d, next=%d "
+        //       "RVS_next_cnt=%d\n",
+        //       threadIdx.x, fsm[k].s_key[threadIdx.x], active_cnt, active,
+        //       next, RVS_next_cnt);
+
         if (active_cnt + RVS_next_cnt < W) {  // empty
           int prefix_cnt = __popc(active_mask & prefixlanes);
           if (active) {
@@ -193,10 +211,14 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
           RVS_next_cnt += active_cnt;
 
           // empty, switch to HASH
-          active = false;  // empty
-          fsm_state[k] = state_t::HASH;
+          fsm[k].active = false;  // empty
+          fsm[k].state = state_t::HASH;
 
         } else {  // full
+          // if (threadIdx.x == 0) {
+          //   printf("tid=%d, key=%d, full\n", threadIdx.x,
+          //          fsm[k].s_key[threadIdx.x]);
+          // }
           int inactive_mask = ~active_mask;
           int prefix_cnt = __popc(inactive_mask & prefixlanes);
           int remain_cnt = RVS_next_cnt + active_cnt - 32;
@@ -211,8 +233,8 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
           RVS_next_cnt = remain_cnt;
 
           // full, continue to MATCH
-          active = true;  // full
-          fsm_state[k] = state_t::MATCH;
+          fsm[k].active = true;  // full
+          fsm[k].state = state_t::MATCH;
           pref.commit(&VSMEM(k), &r_key[next - 1], sizeof(int32_t));
         }
         // finish integration --------------------------------------
@@ -228,6 +250,7 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
       }
       case state_t::MATCH: {
         int32_t r_key_v = 0, s_key_v = 0;
+        bool active = fsm[k].active;
         if (active) {
           pref.wait();
           r_key_v = VSMEM(k);
@@ -256,8 +279,8 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
           }
           RVS_match0_cnt += branch0_cnt;
 
-        } else {  // branch 0 full -> Move to DVS buffer
-          assert(DVS_match0_full == 0);
+        } else {                         // branch 0 full -> Move to DVS buffer
+          assert(DVS_match0_full == 0);  // TODO: fix bug, reorder
           if (branch0) {
             DVS_match0.s_key[threadIdx.x] = s_key_v;
             DVS_match0.s_payload[threadIdx.x] = fsm[k].s_payload[threadIdx.x];
@@ -299,14 +322,14 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
             fsm[k].next[threadIdx.x] = next;
 
             // switch to  DVS_match0, fully active
-            active = true;
-            fsm_state[k] = state_t::NEXT;
+            fsm[k].active = true;
+            fsm[k].state = state_t::NEXT;
             pref.commit(&VSMEM(k), &ht_link[next - 1], sizeof(int32_t));
-
+            DVS_match0_full = 0;
           } else {
             // still empty, inactive
-            active = false;
-            fsm_state[k] = state_t::HASH;
+            fsm[k].active = false;
+            fsm[k].state = state_t::HASH;
           }
 
         } else {  // fill branch 1
@@ -323,8 +346,8 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
           RVS_match1_cnt = remain_cnt;
 
           // full contine to PAYLOAD
-          active = true;
-          fsm_state[k] = state_t::PAYLOAD;
+          fsm[k].active = true;
+          fsm[k].state = state_t::PAYLOAD;
           int next = fsm[k].next[threadIdx.x];
           pref.commit(&VSMEM(k), &r_payload[next - 1], sizeof(int32_t));
         }
@@ -340,14 +363,15 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
         break;
       }
       case state_t::PAYLOAD: {
+        bool active = fsm[k].active;
         if (active) {
           pref.wait();
           int32_t r_payload_v = VSMEM(k);
-          printf("%d\n", aggr_local);
+          // printf("%d\n", aggr_local);
           aggr_fn_local(r_payload_v, fsm[k].s_payload[threadIdx.x],
                         &aggr_local);
 
-          fsm_state[k] = state_t::NEXT;
+          fsm[k].state = state_t::NEXT;
           pref.commit(&VSMEM(k), &ht_link[fsm[k].next[threadIdx.x] - 1],
                       sizeof(int32_t));
         }
@@ -359,6 +383,18 @@ __global__ void probe_ht(int32_t* s_key, int32_t* s_payload, int32_t s_n,
 
   // TODO: clear all remaining RVSs
   aggr_fn_global(aggr_local, o_aggr);
+}
+
+void print_ht(int32_t* d_ht_slot, int32_t* d_ht_link, int32_t ht_size) {
+  int32_t* ht_slot = new int32_t[ht_size];
+  int32_t* ht_link = new int32_t[ht_size];
+  CHKERR(cutil::CpyDeviceToHost(ht_slot, d_ht_slot, ht_size));
+  CHKERR(cutil::CpyDeviceToHost(ht_link, d_ht_link, ht_size));
+  for (int i = 0; i < ht_size; ++i) {
+    fmt::print("{}: {}-{}\n", i, ht_slot[i], ht_link[i]);
+  }
+  delete[] ht_slot;
+  delete[] ht_link;
 }
 
 int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
@@ -451,6 +487,7 @@ int join(int32_t* r_key, int32_t* r_payload, int32_t r_n, int32_t* s_key,
       ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
       s_n * 1.0 / ms_probe * 1000);
 
+  // print_ht(d_ht_slot, d_ht_link, ht_size);
   // CHKERR(cutil::CpyDeviceToHost(o_payload, d_o_payload, s_n));
   int32_t aggr;
   CHKERR(cutil::CpyDeviceToHost(&aggr, d_aggr, 1));
