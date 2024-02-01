@@ -64,9 +64,9 @@ struct prefetch_t {
                                          const void* __restrict__ src_global,
                                          size_t size_and_align,
                                          size_t zfill = 0UL) {
-    // __pipeline_memcpy_async(dst_shared, src_global, size_and_align, zfill);
-    // __pipeline_commit();
-    memcpy(dst_shared, src_global, size_and_align);
+    __pipeline_memcpy_async(dst_shared, src_global, size_and_align, zfill);
+    __pipeline_commit();
+    // memcpy(dst_shared, src_global, size_and_align);
     ++pending;
     // assert(pending <= INT8_MAX);
   }
@@ -74,25 +74,28 @@ struct prefetch_t {
   __device__ __forceinline__ void commit_k(void* __restrict__ dst_shared,
                                            const void* __restrict__ src_global,
                                            size_t size_and_align, int k,
-                                           size_t zfill = 0UL) {
-    // __pipeline_memcpy_async(dst_shared, src_global, size_and_align, zfill);
-    // __pipeline_commit();
-    memcpy(dst_shared, src_global, size_and_align);
+                                           int state, size_t zfill = 0UL) {
+    __pipeline_memcpy_async(dst_shared, src_global, size_and_align, zfill);
+    __pipeline_commit();
+    // memcpy(dst_shared, src_global, size_and_align);
     ++pending;
     // assert(pending <= INT8_MAX);
-    // printf("  tid=%d, commit k=%d, pending=%d\n", threadIdx.x, k, pending);
+    // printf("  tid=%d, commit k=%d, pending=%d, state=%d\n", threadIdx.x, k,
+    //        pending, state);
   }
   __device__ __forceinline__ void wait() {
     // assert(pending);
     // printf("  tid=%d, wait=%d\n", threadIdx.x, pending - 1);
-    // __pipeline_wait_prior(pending - 1);
+    __pipeline_wait_prior(pending - 1);
     --pending;
   }
 
-  __device__ __forceinline__ void wait_k(int k) {
+  __device__ __forceinline__ void wait_k(int k, int state) {
     // assert(pending);
-    // printf("  tid=%d, k=%d, wait=%d\n", threadIdx.x, k, pending - 1);
-    // __pipeline_wait_prior(pending - 1);
+    // printf("  tid=%d, k=%d, wait=%d, state=%d\n", threadIdx.x, k, pending -
+    // 1,
+    //        state);
+    __pipeline_wait_prior(pending - 1);
     --pending;
   }
 };

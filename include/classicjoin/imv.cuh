@@ -128,7 +128,12 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
             int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
 
             pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+            // pref.commit_k(&VSMEM(k), &ht_slot[hval], 8, k,
+            // (int)state_t::HASH);
           }
+
+          __syncwarp();
+
           fsm[k].state[threadIdx.x] = state_t::NEXT;
           fsm[k].active[threadIdx.x] = active;
 
@@ -145,6 +150,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
 
         if (active) {
           pref.wait();
+          // pref.wait_k(k, (int)state_t::NEXT);
           fsm[k].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(k));
           // assert(((uint64_t)fsm[k].next[threadIdx.x]) % 8 == 0 &&
           //        "Line 147 misaligned");
@@ -152,6 +158,8 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           // printf("k=%d,tid=%d, next = %p\n", k, tid,
           // fsm[k].next[threadIdx.x]);
         }
+
+        __syncwarp();
 
         // integration
         int active_mask = __ballot_sync(MASK_ALL_LANES, active);
@@ -187,10 +195,12 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           rvs_cnt = remain_cnt;
           // printf("k=%d,tid=%d, FULL, rvs_cnt = %d\n", k, tid, rvs_cnt);
 
+          pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8);
+          // pref.commit_k(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8, k,
+          //               (int)state_t::NEXT);
           // full, switch to match
           fsm[k].state[threadIdx.x] = state_t::MATCH;
           fsm[k].active[threadIdx.x] = true;
-          pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8);
         }
         break;
       }
@@ -200,6 +210,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
 
         if (active) {
           pref.wait();
+          // pref.wait_k(k, (int)state_t::MATCH);
           Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
           // assert(((uint64_t)r_tuple) % 8 == 0 && "Line 197 misaligned");
           Tuple *s_tuple = &fsm[k].s_tuple[threadIdx.x];
@@ -210,11 +221,15 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           }
         }
 
-        fsm[k].state[threadIdx.x] = state_t::NEXT;
         pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
+        // pref.commit_k(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8, k,
+        //               (int)state_t::MATCH);
+        fsm[k].state[threadIdx.x] = state_t::NEXT;
 
         break;
       }
+      default:
+        break;
     }
     ++k;
   }
