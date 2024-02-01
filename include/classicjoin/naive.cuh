@@ -51,20 +51,19 @@ __global__ void probe_ht(Tuple *s, int s_n, EntryHeader *ht_slot,
   int32_t aggr_local = 0;
 
   for (size_t i = tid; i < s_n; i += stride) {
-    Tuple s_tuple = s[i];
+    Tuple s_tuple = s[i];  // NO Prefech
     int hval = s_tuple.k & ht_mask;
 
-    Entry *next = ht_slot[hval].next;
+    Entry *next = ht_slot[hval].next;  // random read
 
     while (next) {
-      Entry *entry = reinterpret_cast<Entry *>(next);
-      Tuple r_tuple = entry->tuple;
+      Tuple r_tuple = next->tuple;  // random read
       if (r_tuple.k == s_tuple.k) {
         aggr_fn_local(r_tuple.v, s_tuple.v, &aggr_local);
         // break;
       }
 
-      next = next->header.next;
+      next = next->header.next;  // prefetch
     }
   }
   aggr_fn_global(aggr_local, o_aggr);

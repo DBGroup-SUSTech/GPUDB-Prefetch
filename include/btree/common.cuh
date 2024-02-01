@@ -13,11 +13,6 @@ struct Node {
   // optimistic lock
   __device__ __forceinline__ gutil::ull_t read_lock_or_restart(
       bool &need_restart) const {
-    if (((uint64_t)&version_lock_obsolete) % 8 != 0) {
-      // TODO
-      printf("misaligned version of node %p\n", this);
-      assert(0);
-    }
     gutil::ull_t version;
     version = gutil::atomic_load(&version_lock_obsolete);
     if (gutil::is_locked(version) || gutil::is_obsolete(version)) {
