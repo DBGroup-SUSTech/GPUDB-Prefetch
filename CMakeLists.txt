@@ -14,7 +14,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 
-# ---[ Using cmake scripts and modules
+# --- Using cmake scripts and modules
 # list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
 
 # Enable ASAN only as you need. Please notice
@@ -25,7 +25,7 @@ find_package(GTest)
 include(GoogleTest)
 find_package(fmt)
 
-# # ---[ Dependencies
+# --- Dependencies
 # include(cmake/Dependencies.cmake)
 
 set(SRC_PATH ${PROJECT_SOURCE_DIR}/src)
