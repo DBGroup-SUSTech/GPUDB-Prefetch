@@ -84,7 +84,6 @@ int create_relation_nonunique(const char *filename, int *relation,
   return 0;
 }
 
-// TODO: limitations: this only generates the perfect hash cases
 int create_relation_unique(const char *filename, int *relation,
                            uint64_t num_tuples, const int64_t maxid) {
   /*first try to read from a file*/
@@ -95,6 +94,24 @@ int create_relation_unique(const char *filename, int *relation,
   }
 
   return 0;
+}
+
+/// @note convert the int array into int64_t array
+int create_relation_unique(const char *filename, int64_t *relation,
+                           uint64_t num_tuples, const int64_t maxid) {
+  int *relation32 = new int[num_tuples];
+  int ret;
+  if (readFromFile(filename, relation32, num_tuples)) {
+    random_unique_gen(relation32, num_tuples, maxid);
+    ret = writeToFile(filename, relation32, num_tuples);
+  }
+  ret = 0;
+
+  for (int i = 0; i < num_tuples; ++i) {
+    relation[i] = relation32[i];
+  }
+  delete[] relation32;
+  return ret;
 }
 
 int create_relation_n(int *in_relation, int *out_relation, uint64_t num_tuples,

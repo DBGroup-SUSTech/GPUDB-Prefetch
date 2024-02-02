@@ -81,7 +81,7 @@ struct InnerNode : public Node {
   }
 
   __device__ __forceinline__ InnerNode *split_alloc(
-      int &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+      int64_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
     InnerNode *new_inner = node_allocator.malloc<InnerNode>();
     new_inner->type = Node::Type::INNER;
 
@@ -89,17 +89,18 @@ struct InnerNode : public Node {
     this->n_key = n_key - new_inner->n_key - 1;
     sep = keys[n_key];
     // copy n keys and n + 1 childs
-    memcpy(new_inner->keys, keys + n_key + 1, sizeof(int) * new_inner->n_key);
+    memcpy(new_inner->keys, keys + n_key + 1,
+           sizeof(int64_t) * new_inner->n_key);
     memcpy(new_inner->children, children + n_key + 1,
            sizeof(Node *) * (new_inner->n_key + 1));
     return new_inner;
   }
 
-  __device__ __forceinline__ void insert(int key, Node *child) {
+  __device__ __forceinline__ void insert(int64_t key, Node *child) {
     assert(n_key < MAX_ENTRIES - 1);
     int pos = lower_bound(key);
     util::memmove_forward(keys + pos + 1, keys + pos,
-                          sizeof(int) * (n_key - pos));
+                          sizeof(int64_t) * (n_key - pos));
     util::memmove_forward(children + pos + 1, children + pos,
                           sizeof(Node *) * (n_key + 1 - pos));
     // assert(pos < MAX_ENTRIES);
@@ -149,7 +150,7 @@ struct LeafNode : public Node {
   }
 
   __device__ __forceinline__ LeafNode *split_alloc(
-      int &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+      int64_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
     LeafNode *new_leaf = node_allocator.malloc<LeafNode>();
     new_leaf->type = Node::Type::LEAF;
     new_leaf->n_key = n_key / 2;
@@ -157,13 +158,13 @@ struct LeafNode : public Node {
 
     sep = keys[n_key - 1];
 
-    memcpy(new_leaf->keys, keys + n_key, sizeof(int) * new_leaf->n_key);
-    memcpy(new_leaf->values, values + n_key, sizeof(int) * new_leaf->n_key);
+    memcpy(new_leaf->keys, keys + n_key, sizeof(int64_t) * new_leaf->n_key);
+    memcpy(new_leaf->values, values + n_key, sizeof(int64_t) * new_leaf->n_key);
 
     return new_leaf;
   }
 
-  __device__ __forceinline__ void insert(int key, int value) {
+  __device__ __forceinline__ void insert(int64_t key, int64_t value) {
     if (n_key) {
       // printf("n_key = %d\n", n_key);
       int pos = lower_bound(key);
@@ -174,9 +175,9 @@ struct LeafNode : public Node {
         return;
       }
       util::memmove_forward(keys + pos + 1, keys + pos,
-                            sizeof(int) * (n_key - pos));
+                            sizeof(int64_t) * (n_key - pos));
       util::memmove_forward(values + pos + 1, values + pos,
-                            sizeof(int) * (n_key - pos));
+                            sizeof(int64_t) * (n_key - pos));
       keys[pos] = key;
       values[pos] = value;
     } else {

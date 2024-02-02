@@ -12,7 +12,8 @@
 
 namespace btree {
 namespace naive {
-__device__ __forceinline__ void get(int key, int &value, const Node *root) {
+__device__ __forceinline__ void get(int64_t key, int64_t &value,
+                                    const Node *root) {
   const Node *node = root;
   while (node->type == Node::Type::INNER) {
     const InnerNode *inner = static_cast<const InnerNode *>(node);
@@ -20,6 +21,7 @@ __device__ __forceinline__ void get(int key, int &value, const Node *root) {
   }
   const LeafNode *leaf = static_cast<const LeafNode *>(node);
   int pos = leaf->lower_bound(key);
+  // printf("key = %d, leaf = %d\n", key, leaf->keys[pos]);
   if (pos < leaf->n_key && key == leaf->keys[pos]) {
     value = leaf->values[pos];
   } else {
@@ -28,7 +30,7 @@ __device__ __forceinline__ void get(int key, int &value, const Node *root) {
   return;
 }
 
-__global__ void gets_parallel(int *keys, int n, int *values,
+__global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
                               const Node *const *root_p) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
@@ -37,19 +39,19 @@ __global__ void gets_parallel(int *keys, int n, int *values,
   }
 }
 
-void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
+void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
 
   // input
-  int32_t *d_keys = nullptr, *d_values = nullptr;
+  int64_t *d_keys = nullptr, *d_values = nullptr;
   CHKERR(cutil::DeviceAlloc(d_keys, n));
   CHKERR(cutil::DeviceAlloc(d_values, n));
   CHKERR(cutil::CpyHostToDevice(d_keys, keys, n));
   CHKERR(cutil::CpyHostToDevice(d_values, values, n));
 
   // output
-  int32_t *d_outs = nullptr;
+  int64_t *d_outs = nullptr;
   CHKERR(cutil::DeviceAlloc(d_outs, n));
   CHKERR(cutil::DeviceSet(d_outs, 0, n));
 
@@ -106,7 +108,7 @@ void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
       ms_build, n * 1.0 / ms_build * 1000, ms_probe, n * 1.0 / ms_probe * 1000);
 
   // check output
-  int32_t *outs = new int32_t[n];
+  int64_t *outs = new int64_t[n];
   CHKERR(cutil::CpyDeviceToHost(outs, d_outs, n));
   for (int i = 0; i < n; ++i) {
     assert(outs[i] == values[i]);

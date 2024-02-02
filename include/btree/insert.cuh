@@ -4,7 +4,7 @@
 namespace btree {
 
 __device__ __forceinline__ void put_olc(
-    int key, int value, Node **root_p,
+    int64_t key, int64_t value, Node **root_p,
     DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
 restart:
   bool need_restart = false;
@@ -36,7 +36,7 @@ restart:
       }
 
       // split
-      int sep;
+      int64_t sep;
       InnerNode *new_inner = inner->split_alloc(sep, node_allocator);
       if (parent) {
         parent->insert(sep, new_inner);
@@ -103,7 +103,7 @@ restart:
     }
 
     // split
-    int sep;
+    int64_t sep;
     LeafNode *new_leaf = leaf->split_alloc(sep, node_allocator);
     if (parent) {
       parent->insert(sep, new_leaf);
@@ -142,7 +142,7 @@ restart:
   }
 }
 
-__global__ void puts_olc(int *keys, int *values, int n, Node **root_p,
+__global__ void puts_olc(int64_t *keys, int64_t *values, int n, Node **root_p,
                          DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
   // int wid = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
 

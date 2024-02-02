@@ -16,16 +16,16 @@ TEST(unique, naive) {
   int32_t n = args::get<int32_t>("N");
   std::string key_fname = cutil::rel_fname(true, "key_uniq", n, 0);
   std::string val_fname = cutil::rel_fname(true, "val_uniq", n, 0);
-  int32_t *keys = new int32_t[n];
-  int32_t *values = new int32_t[n];
+  int64_t *keys = new int64_t[n];
+  int64_t *values = new int64_t[n];
 
   assert(!datagen::create_relation_unique(key_fname.c_str(), keys, n, n));
   assert(!datagen::create_relation_unique(val_fname.c_str(), values, n, n));
 
   fmt::print("Creating {} unique keys ({} MB)\n", n,
-             n * sizeof(int32_t) / 1024 / 1024);
+             n * sizeof(int64_t) / 1024 / 1024);
   fmt::print("Creating {} unique values ({} MB)\n", n,
-             n * sizeof(int32_t) / 1024 / 1024);
+             n * sizeof(int64_t) / 1024 / 1024);
 
   int els_per_thread = 4;
   int threads_per_block = 256;
