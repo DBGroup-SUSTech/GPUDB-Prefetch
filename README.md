@@ -6,7 +6,7 @@
 |:---:|:---:|:---:| :---:| :---:| :---:|
 | Hash Join Probe | ✅ | 🔨 | 🔨 | ✅ | ✅ |
 | Hash Join Build | ✅ |  |  |  |  |
-| BTree Lookup    | ✅ | 🔨 | 🔨 | 🔨 | 🔨 |
+| BTree Lookup    | ✅ | 🔨 | 🔨 | ✅ | 🔨 |
 | BTree Insert    | ✅ | |  |  |  |
 
 ## Workload Description
