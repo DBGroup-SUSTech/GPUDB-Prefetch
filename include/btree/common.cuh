@@ -1,5 +1,6 @@
 #pragma once
 #include <assert.h>
+#include <cuda_pipeline.h>
 
 #include "util/allocator.cuh"
 #include "util/util.cuh"
@@ -50,7 +51,7 @@ struct Node {
 };
 
 struct InnerNode : public Node {
-  static const int MAX_ENTRIES = 16;
+  static const int MAX_ENTRIES = 6;
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
@@ -119,7 +120,7 @@ struct InnerNode : public Node {
 };
 
 struct LeafNode : public Node {
-  static const int MAX_ENTRIES = 16;
+  static const int MAX_ENTRIES = 6;
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
@@ -213,6 +214,31 @@ struct Config {
   int build_blocksize = -1;
   int probe_gridsize = -1;
   int probe_blocksize = -1;
+};
+
+struct prefetch_node_t {
+  int8_t pending = 0;
+  __device__ __forceinline__ void commit(void *__restrict__ dst_shared,
+                                         const void *__restrict__ src_global) {
+    // 280 = 16 * 17 + 8
+    auto dst = reinterpret_cast<char *>(dst_shared);
+    auto src = reinterpret_cast<const char *>(src_global);
+    for (int i = 0; i < sizeof(InnerNode) / 8; i += 1) {
+      __pipeline_memcpy_async(dst, src, 8);
+      dst += 8, src += 8;
+    }
+    __pipeline_commit();
+    // memcpy(dst_shared, src_global, size_and_align);
+    ++pending;
+    // assert(pending <= INT8_MAX);
+  }
+
+  __device__ __forceinline__ void wait() {
+    // assert(pending);
+    // printf("  tid=%d, wait=%d\n", threadIdx.x, pending - 1);
+    __pipeline_wait_prior(pending - 1);
+    --pending;
+  }
 };
 
 }  // namespace btree
