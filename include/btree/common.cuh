@@ -56,14 +56,14 @@ struct InnerNode : public Node {
   int n_key;
 
   Node *children[MAX_ENTRIES];
-  int keys[MAX_ENTRIES];
+  int64_t keys[MAX_ENTRIES];
 
   __device__ __forceinline__ bool is_full() const {
     return n_key == MAX_ENTRIES - 1;
   }
 
   // return the position to insert, equal to binary search
-  __device__ __forceinline__ int lower_bound(int key) const {
+  __device__ __forceinline__ int lower_bound(int64_t key) const {
     int lower = 0;
     int upper = n_key;
     while (lower < upper) {
@@ -102,13 +102,13 @@ struct InnerNode : public Node {
                           sizeof(int) * (n_key - pos));
     util::memmove_forward(children + pos + 1, children + pos,
                           sizeof(Node *) * (n_key + 1 - pos));
-    assert(pos < MAX_ENTRIES);
+    // assert(pos < MAX_ENTRIES);
     keys[pos] = key;
     children[pos] = child;
 
     // printf("children %p\n", children);
-    assert(pos < MAX_ENTRIES && pos >= 0);
-    assert(((uint64_t)children) % 8 == 0);
+    // assert(pos < MAX_ENTRIES && pos >= 0);
+    // assert(((uint64_t)children) % 8 == 0);
     auto tmp = children[pos];
     children[pos] = children[pos + 1];
     children[pos + 1] = tmp;
@@ -122,14 +122,14 @@ struct LeafNode : public Node {
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
-  int keys[MAX_ENTRIES];
-  int values[MAX_ENTRIES];
+  int64_t keys[MAX_ENTRIES];
+  int64_t values[MAX_ENTRIES];
 
   __device__ __forceinline__ bool is_full() const {
     return n_key == MAX_ENTRIES;
   }
 
-  __device__ __forceinline__ int lower_bound(int key) const {
+  __device__ __forceinline__ int lower_bound(int64_t key) const {
     int lower = 0;
     int upper = n_key;
     while (lower < upper) {

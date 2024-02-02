@@ -1,6 +1,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "btree/amac.cuh"
 #include "btree/common.cuh"
 #include "btree/naive.cuh"
 #include "datagen/generator_ETHZ.cuh"
