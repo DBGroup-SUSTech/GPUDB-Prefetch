@@ -51,7 +51,7 @@ struct Node {
 };
 
 struct InnerNode : public Node {
-  static const int MAX_ENTRIES = 6;
+  static const int MAX_ENTRIES = 6;  // TODO: the best case of MAX_ENTRIES for naive is >= 16
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
