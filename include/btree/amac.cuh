@@ -50,8 +50,8 @@ struct fsm_t {
 
 // for method 4 ------------------------------
 constexpr int PDIST_4 = 8;
-constexpr int THREADS_PER_BLOCK_4 = 64;  // method 4
-constexpr int LANES_PER_BLOCK = 16;
+constexpr int THREADS_PER_BLOCK_4 = 128;  // method 4
+constexpr int LANES_PER_BLOCK = 32;
 constexpr int LANES_PER_WARP = 8;  // or 8
 constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
 #define VSMEM_4(index) v[index * LANES_PER_BLOCK + lid]

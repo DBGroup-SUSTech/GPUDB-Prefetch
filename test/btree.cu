@@ -23,7 +23,7 @@ TEST(unique, naive) {
   fmt::print("Creating {} unique values ({} MB)\n", n,
              n * sizeof(int64_t) / 1024 / 1024);
 
-  int els_per_thread = 8; // 8/32 per warp is the best
+  int els_per_thread = 8;  // 8/32 per warp is the best
   int threads_per_block = 32;
   btree::Config config;
 
@@ -62,8 +62,8 @@ TEST(unique, amac) {
   config.build_blocksize = threads_per_block;
   // config.probe_gridsize = blocks_per_grid;
   // config.probe_blocksize = threads_per_block;
-  config.probe_blocksize = 64;
-  config.probe_gridsize = 72 * 8;
+  config.probe_blocksize = 128;
+  config.probe_gridsize = 72 * 2;
   // config.probe_gridsize = 1;
   btree::amac::index(keys, values, n, config);
   fmt::print("Insert and Lookup {} tuples into BTree\n", n);
