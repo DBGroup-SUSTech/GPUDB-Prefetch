@@ -13,6 +13,15 @@
   } while (0)
 
 namespace util {
+template <typename T>
+__host__ __device__ __forceinline__ int scalar_cmp(T l, T r) {
+  if (l == r)
+    return 0;
+  else if (l > r)
+    return 1;
+  else
+    return -1;
+}
 // dest >= src
 __host__ __device__ __forceinline__ void memmove_forward(void *dest,
                                                          const void *src,
@@ -32,6 +41,12 @@ __host__ __device__ __forceinline__ void memmove_forward(void *dest,
 
 namespace gutil {
 using ull_t = unsigned long long;
+
+template <typename T>
+__device__ __forceinline__ T atomic_exch_64(T *address, T val) {
+  return reinterpret_cast<T>(atomicExch(reinterpret_cast<ull_t *>(address),
+                                        reinterpret_cast<ull_t>(val)));
+}
 
 // optimistic locks API
 __device__ __forceinline__ bool is_locked(ull_t version) {

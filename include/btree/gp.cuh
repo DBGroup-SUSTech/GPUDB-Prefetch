@@ -1,42 +1,73 @@
 #pragma once
 #include <assert.h>
+#include <cuda_pipeline_primitives.h>
 
 #include "btree/common.cuh"
 #include "btree/insert.cuh"
 
 /// @note
-/// B-Tree, fanout = 16, leaf node size = 16
-/// int32_t keys, int32_t values
-/// insert with OLC
-/// search with
 
 namespace btree {
-namespace naive {
-__device__ __forceinline__ void get(int64_t key, int64_t &value,
-                                    const Node *root) {
-  const Node *node = root;
-  while (node->type == Node::Type::INNER) {
-    const InnerNode *inner = static_cast<const InnerNode *>(node);
-    node = inner->children[inner->lower_bound(key)];
-  }
-  const LeafNode *leaf = static_cast<const LeafNode *>(node);
-  int pos = leaf->lower_bound(key);
-  // printf("key = %d, leaf = %d\n", key, leaf->keys[pos]);
-  if (pos < leaf->n_key && key == leaf->keys[pos]) {
-    value = leaf->values[pos];
-  } else {
-    value = -1;
-  }
-  return;
-}
+namespace gp {
+
+constexpr int G_MAX = 8;
+constexpr int THREADS_PER_BLOCK = 8;
+#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+
+__shared__ InnerNode v[G_MAX * THREADS_PER_BLOCK];  // prefetch buffer
 
 __global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
                               const Node *const *root_p) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if(tid >= n)
+    return ;
   int stride = blockDim.x * gridDim.x;
-  for (int i = tid; i < n; i += stride) {
-    get(keys[i], values[i], *root_p);
+
+  assert(blockDim.x == THREADS_PER_BLOCK);
+  static_assert(sizeof(InnerNode) == sizeof(LeafNode));
+
+  prefetch_node_t pref{};
+  int G = (n-1-tid) / stride + 1;
+  assert(G <= G_MAX);
+
+  pref.commit(&VSMEM(0), *root_p);
+  pref.wait();
+  int64_t key[G_MAX];
+  for (int k = 0; k < G; k ++) {
+    if(k)
+      VSMEM(k) = VSMEM(0);
+    key[k] = keys[tid + k * stride];
   }
+
+  for (int round = 0; ; round ++) {
+    bool flag = false;
+    for (int k = 0, i = tid; k < G; k ++, i += stride) {
+
+      if (round)
+        pref.wait();
+
+      auto node = static_cast<const Node *> (&VSMEM(k));
+      if (node->type == Node::Type::INNER) {
+        auto inner = static_cast<const InnerNode *>(node);
+        int pos = inner->lower_bound(key[k]);
+        pref.commit(&VSMEM(k), inner->children[pos]);
+      } else {
+        flag = true;
+        auto leaf = static_cast<const LeafNode *>(node);
+        auto &value = values[i];
+
+        int pos = leaf->lower_bound(key[k]);
+        if (pos < leaf->n_key && key[k] == leaf->keys[pos]) {
+          value = leaf->values[pos];
+        } else {
+          value = -1;
+        }
+      } 
+    }
+    if(flag)
+      break;
+  }
+  
 }
 
 void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
@@ -95,8 +126,8 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
   CHKERR(cudaStreamEndCapture(stream, &graph));
   CHKERR(cudaGraphInstantiate(&instance, graph));
   CHKERR(cudaGraphLaunch(instance, stream));
-
   CHKERR(cudaStreamSynchronize(stream));
+
   float ms_build, ms_probe;
   CHKERR(cudaEventElapsedTime(&ms_build, start_build, end_build));
   CHKERR(cudaEventElapsedTime(&ms_probe, start_probe, end_probe));
