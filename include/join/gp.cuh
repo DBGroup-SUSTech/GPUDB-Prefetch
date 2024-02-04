@@ -31,7 +31,7 @@ typedef enum state_t
     NEXT,
     MATCH,
     PAYLOAD,
-    Done,
+    DONE,
 } state_t;
 
 struct prefetch_t
@@ -161,7 +161,7 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
                     if (reg_r_tuple_id[j] == -1)
                     {
                         finish_match_num++;
-                        reg_state[j] = state_t::Done;
+                        reg_state[j] = state_t::DONE;
                     }
                     else
                     {
