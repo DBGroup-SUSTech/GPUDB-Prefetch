@@ -19,9 +19,10 @@ namespace join
 {
 namespace spp
 {
-
 #define D 2
 #define K 3
+#define PADDING 1
+#define THREAD_PER_BLOCK 256
 // the virtual_tuplle_id in the thread tid
 #define REAL_TUPLE_ID(virtual_tuple_id) ((tid) + (stride) * (virtual_tuple_id))
 
@@ -120,15 +121,15 @@ __global__ void build_ht(int32_t *r_key, int32_t r_n, int32_t *ht_link, int32_t 
 /// @param [in]     ht_slot     R hash table slot
 /// @param [in]     ht_size_log R hash table size = ht_size_log << 1
 /// @param [in]     o_aggr      output aggregation results for matched r's
-__global__ void probe_ht_1(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key, int32_t *r_payload,
-                           int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log, int32_t *o_aggr)
+__global__ void probe_ht_spill_1(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key, int32_t *r_payload,
+                                 int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log, int32_t *o_aggr)
 {
     extern __shared__ int shared_buffer[];
 
-    int32_t reg_s_key[K * D + 1];
-    int32_t reg_s_payload[K * D + 1];
-    int32_t reg_r_tuple_id[K * D + 1];
-    element_state_t reg_state[K * D + 1];
+    int32_t reg_s_key[K * D + 1 + PADDING];
+    int32_t reg_s_payload[K * D + 1 + PADDING];
+    int32_t reg_r_tuple_id[K * D + 1 + PADDING];
+    element_state_t reg_state[K * D + 1 + PADDING];
 
     int32_t reg_r_key = -1;
     int32_t reg_r_payload = -1;
@@ -310,8 +311,8 @@ __global__ void probe_ht_1(int32_t *s_key, int32_t *s_payload, int32_t s_n, int3
 /// @param [in]     ht_size_log R hash table size = ht_size_log << 1
 /// @param [in]     o_aggr      output aggregation results for matched r's
 __launch_bounds__(256, 1) __global__
-    void probe_ht_2(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key, int32_t *r_payload,
-                    int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log, int32_t *o_aggr)
+    void probe_ht_spill_2(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key, int32_t *r_payload,
+                          int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log, int32_t *o_aggr)
 {
     extern __shared__ int shared_buffer[];
 
@@ -489,6 +490,376 @@ __launch_bounds__(256, 1) __global__
     aggr_fn_global(aggr_local, o_aggr);
 }
 
+/// @brief Use S to probe
+/// @param [in]     s_key       all keys of S
+/// @param [in]     s_payload   all payload of S
+/// @param [in]     s_n         number of S items
+/// @param [in]     r_key       all keys of R
+/// @param [in]     r_payload   all payload of R
+/// @param [in]     ht_link     R hash table link
+/// @param [in]     ht_slot     R hash table slot
+/// @param [in]     ht_size_log R hash table size = ht_size_log << 1
+/// @param [in]     o_aggr      output aggregation results for matched r's
+__global__ void probe_ht_smem_all(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key, int32_t *r_payload,
+                                  int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log, int32_t *o_aggr)
+{
+    extern __shared__ int shared_buffer[];
+
+    int32_t __shared__ smem_s_key[(K * D + 1) * THREAD_PER_BLOCK];
+    int32_t __shared__ smem_s_payload[(K * D + 1) * THREAD_PER_BLOCK];
+    int32_t __shared__ smem_r_tuple_id[(K * D + 1) * THREAD_PER_BLOCK];
+    element_state_t __shared__ smem_state[(K * D + 1) * THREAD_PER_BLOCK];
+
+    int32_t reg_r_key = -1;
+    int32_t reg_r_payload = -1;
+
+    int ht_size = 1 << ht_size_log;
+    int ht_mask = ht_size - 1;
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    int probe_num = 32;
+
+    int aggr_local = 0;
+
+    // prefetch_t pref{};
+    prefetch_handler_t pref_handler{};
+
+    int hash_virtual_id = 0;
+    int next_virtual_id = -D;
+    int match_virtual_id = -2 * D;
+    int payload_virtual_id = -3 * D;
+
+    int rematch_virtual_s_tuple_id = -1;
+    int finish_num = 0;
+    pipline_state_t pipline_state = pipline_state_t::NORMAL;
+
+    int idx = -1;
+    int shared_buffer_idx = -1;
+
+    while (finish_num != probe_num)
+    {
+        // hash stage:
+        if (pipline_state != pipline_state_t::INTERRUPTION)
+        {
+            idx = hash_virtual_id % (K * D + 1);
+            ++hash_virtual_id;
+            if (hash_virtual_id <= probe_num)
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                smem_state[shared_buffer_idx] = element_state_t::HASH;
+                // reg_s_key[idx] = s_key[REAL_TUPLE_ID(hash_virtual_id - 1)];
+                // reg_s_payload[idx] = s_payload[REAL_TUPLE_ID(hash_virtual_id - 1)];
+                smem_s_key[shared_buffer_idx] = s_key[tid + stride * (hash_virtual_id - 1)];
+                smem_s_payload[shared_buffer_idx] = s_payload[tid + stride * (hash_virtual_id - 1)];
+                // hash
+                int slot_num = smem_s_key[shared_buffer_idx] & ht_mask;
+                // pref.commit(&shared_buffer[shared_buffer_idx], &ht_slot[slot_num], sizeof(int32_t));
+                pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx], &ht_slot[slot_num],
+                                    sizeof(int32_t));
+
+                smem_state[shared_buffer_idx] = element_state_t::NEXT;
+            }
+            pipline_state = pipline_state_t::NORMAL;
+        }
+
+        // next stage:
+        if (pipline_state == pipline_state_t::NORMAL)
+        {
+            idx = next_virtual_id % (K * D + 1);
+            ++next_virtual_id;
+        }
+        else
+        {
+            idx = rematch_virtual_s_tuple_id % (K * D + 1);
+        }
+        if (pipline_state == pipline_state_t::INTERRUPTION ||
+            (pipline_state == pipline_state_t::NORMAL && (next_virtual_id <= probe_num) && next_virtual_id >= 1))
+        {
+            shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+            // pref.wait();
+            pref_handler.wait(pipline_state);
+            // r_tuple_id = next - 1
+            smem_r_tuple_id[shared_buffer_idx] = shared_buffer[shared_buffer_idx] - 1;
+            if (smem_r_tuple_id[shared_buffer_idx] == -1)
+            {
+                finish_num++;
+                smem_state[shared_buffer_idx] = element_state_t::DONE;
+
+                if (pipline_state == pipline_state_t::INTERRUPTION)
+                {
+                    pipline_state = pipline_state_t::RENORMAL;
+                }
+            }
+            else
+            {
+                // pref.commit(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[idx]], sizeof(int32_t));
+                pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                    &r_key[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                smem_state[shared_buffer_idx] = element_state_t::MATCH;
+            }
+        }
+
+        // match stage
+        if (pipline_state != pipline_state_t::RENORMAL)
+        {
+            if (pipline_state == pipline_state_t::NORMAL)
+            {
+                idx = match_virtual_id % (K * D + 1);
+                ++match_virtual_id;
+            }
+            else
+            {
+                idx = rematch_virtual_s_tuple_id % (K * D + 1);
+            }
+            if (pipline_state == pipline_state_t::INTERRUPTION ||
+                (pipline_state == pipline_state_t::NORMAL && (match_virtual_id <= probe_num) && match_virtual_id >= 1))
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                if (smem_state[shared_buffer_idx] == element_state_t::MATCH)
+                {
+                    shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                    // pref.wait();
+                    pref_handler.wait(pipline_state);
+                    reg_r_key = shared_buffer[shared_buffer_idx];
+                    if (reg_r_key == smem_s_key[shared_buffer_idx])
+                    {
+                        // pref.commit(&shared_buffer[shared_buffer_idx], &r_payload[reg_r_tuple_id[idx]],
+                        //             sizeof(int32_t));
+                        pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                            &r_payload[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                        smem_state[shared_buffer_idx] = element_state_t::PAYLOAD;
+                    }
+                    else
+                    {
+                        // pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[idx]],
+                        // sizeof(int32_t));
+                        pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                            &ht_link[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                        smem_state[shared_buffer_idx] = element_state_t::NEXT;
+                    }
+                }
+            }
+        }
+
+        // payload stage
+        if (pipline_state != pipline_state_t::RENORMAL)
+        {
+            if (pipline_state == pipline_state_t::NORMAL)
+            {
+                rematch_virtual_s_tuple_id = payload_virtual_id;
+                idx = payload_virtual_id % (K * D + 1);
+                payload_virtual_id++;
+            }
+            else
+            {
+                idx = rematch_virtual_s_tuple_id % (K * D + 1);
+            }
+            if (pipline_state == pipline_state_t::INTERRUPTION ||
+                (pipline_state == pipline_state_t::NORMAL && (payload_virtual_id <= probe_num) &&
+                 payload_virtual_id >= 1))
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                if (smem_state[shared_buffer_idx] == element_state_t::PAYLOAD)
+                {
+                    // pref.wait();
+                    pref_handler.wait(pipline_state);
+                    // wait() should before seting pipline_state_t::INTERRUPTION, commit() should after.
+                    pipline_state = pipline_state_t::INTERRUPTION;
+                    reg_r_payload = shared_buffer[shared_buffer_idx];
+                    aggr_fn_local(reg_r_payload, smem_s_payload[shared_buffer_idx], &aggr_local);
+                    // pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[idx]], sizeof(int32_t));
+                    pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                        &ht_link[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+
+                    smem_state[shared_buffer_idx] = element_state_t::NEXT;
+                }
+            }
+        }
+    }
+    aggr_fn_global(aggr_local, o_aggr);
+}
+
+__launch_bounds__(256, 1) __global__
+    void probe_ht_smem_state_and_tuple_id(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_t *r_key,
+                                          int32_t *r_payload, int32_t *ht_link, int32_t *ht_slot, int32_t ht_size_log,
+                                          int32_t *o_aggr)
+{
+    extern __shared__ int shared_buffer[];
+
+    int32_t reg_s_key[K * D + 1];
+    int32_t reg_s_payload[K * D + 1];
+    int32_t __shared__ smem_r_tuple_id[(K * D + 1) * THREAD_PER_BLOCK];
+    element_state_t __shared__ smem_state[(K * D + 1) * THREAD_PER_BLOCK];
+
+    int32_t reg_r_key = -1;
+    int32_t reg_r_payload = -1;
+
+    int ht_size = 1 << ht_size_log;
+    int ht_mask = ht_size - 1;
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+    int probe_num = 32;
+
+    int aggr_local = 0;
+
+    // prefetch_t pref{};
+    prefetch_handler_t pref_handler{};
+
+    int hash_virtual_id = 0;
+    int next_virtual_id = -D;
+    int match_virtual_id = -2 * D;
+    int payload_virtual_id = -3 * D;
+
+    int rematch_virtual_s_tuple_id = -1;
+    int finish_num = 0;
+    pipline_state_t pipline_state = pipline_state_t::NORMAL;
+
+    int idx = -1;
+    int shared_buffer_idx = -1;
+
+    while (finish_num != probe_num)
+    {
+        // hash stage:
+        if (pipline_state != pipline_state_t::INTERRUPTION)
+        {
+            idx = hash_virtual_id % (K * D + 1);
+            ++hash_virtual_id;
+            if (hash_virtual_id <= probe_num)
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                smem_state[shared_buffer_idx] = element_state_t::HASH;
+                // reg_s_key[idx] = s_key[REAL_TUPLE_ID(hash_virtual_id - 1)];
+                // reg_s_payload[idx] = s_payload[REAL_TUPLE_ID(hash_virtual_id - 1)];
+                reg_s_key[idx] = s_key[tid + stride * (hash_virtual_id - 1)];
+                reg_s_payload[idx] = s_payload[tid + stride * (hash_virtual_id - 1)];
+                // hash
+                int slot_num = reg_s_key[idx] & ht_mask;
+                // pref.commit(&shared_buffer[shared_buffer_idx], &ht_slot[slot_num], sizeof(int32_t));
+                pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx], &ht_slot[slot_num],
+                                    sizeof(int32_t));
+
+                smem_state[shared_buffer_idx] = element_state_t::NEXT;
+            }
+            pipline_state = pipline_state_t::NORMAL;
+        }
+
+        // next stage:
+        if (pipline_state == pipline_state_t::NORMAL)
+        {
+            idx = next_virtual_id % (K * D + 1);
+            ++next_virtual_id;
+        }
+        else
+        {
+            idx = rematch_virtual_s_tuple_id % (K * D + 1);
+        }
+        if (pipline_state == pipline_state_t::INTERRUPTION ||
+            (pipline_state == pipline_state_t::NORMAL && (next_virtual_id <= probe_num) && next_virtual_id >= 1))
+        {
+            shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+            // pref.wait();
+            pref_handler.wait(pipline_state);
+            // r_tuple_id = next - 1
+            smem_r_tuple_id[shared_buffer_idx] = shared_buffer[shared_buffer_idx] - 1;
+            if (smem_r_tuple_id[shared_buffer_idx] == -1)
+            {
+                finish_num++;
+                smem_state[shared_buffer_idx] = element_state_t::DONE;
+
+                if (pipline_state == pipline_state_t::INTERRUPTION)
+                {
+                    pipline_state = pipline_state_t::RENORMAL;
+                }
+            }
+            else
+            {
+                // pref.commit(&shared_buffer[shared_buffer_idx], &r_key[reg_r_tuple_id[idx]], sizeof(int32_t));
+                pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                    &r_key[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                smem_state[shared_buffer_idx] = element_state_t::MATCH;
+            }
+        }
+
+        // match stage
+        if (pipline_state != pipline_state_t::RENORMAL)
+        {
+            if (pipline_state == pipline_state_t::NORMAL)
+            {
+                idx = match_virtual_id % (K * D + 1);
+                ++match_virtual_id;
+            }
+            else
+            {
+                idx = rematch_virtual_s_tuple_id % (K * D + 1);
+            }
+            if (pipline_state == pipline_state_t::INTERRUPTION ||
+                (pipline_state == pipline_state_t::NORMAL && (match_virtual_id <= probe_num) && match_virtual_id >= 1))
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                if (smem_state[shared_buffer_idx] == element_state_t::MATCH)
+                {
+                    shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                    // pref.wait();
+                    pref_handler.wait(pipline_state);
+                    reg_r_key = shared_buffer[shared_buffer_idx];
+                    if (reg_r_key == reg_s_key[idx])
+                    {
+                        // pref.commit(&shared_buffer[shared_buffer_idx], &r_payload[reg_r_tuple_id[idx]],
+                        //             sizeof(int32_t));
+                        pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                            &r_payload[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                        smem_state[shared_buffer_idx] = element_state_t::PAYLOAD;
+                    }
+                    else
+                    {
+                        // pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[idx]],
+                        // sizeof(int32_t));
+                        pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                            &ht_link[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+                        smem_state[shared_buffer_idx] = element_state_t::NEXT;
+                    }
+                }
+            }
+        }
+
+        // payload stage
+        if (pipline_state != pipline_state_t::RENORMAL)
+        {
+            if (pipline_state == pipline_state_t::NORMAL)
+            {
+                rematch_virtual_s_tuple_id = payload_virtual_id;
+                idx = payload_virtual_id % (K * D + 1);
+                payload_virtual_id++;
+            }
+            else
+            {
+                idx = rematch_virtual_s_tuple_id % (K * D + 1);
+            }
+            if (pipline_state == pipline_state_t::INTERRUPTION ||
+                (pipline_state == pipline_state_t::NORMAL && (payload_virtual_id <= probe_num) &&
+                 payload_virtual_id >= 1))
+            {
+                shared_buffer_idx = blockDim.x * idx + threadIdx.x;
+                if (smem_state[shared_buffer_idx] == element_state_t::PAYLOAD)
+                {
+                    // pref.wait();
+                    pref_handler.wait(pipline_state);
+                    // wait() should before seting pipline_state_t::INTERRUPTION, commit() should after.
+                    pipline_state = pipline_state_t::INTERRUPTION;
+                    reg_r_payload = shared_buffer[shared_buffer_idx];
+                    aggr_fn_local(reg_r_payload, reg_s_payload[idx], &aggr_local);
+                    // pref.commit(&shared_buffer[shared_buffer_idx], &ht_link[reg_r_tuple_id[idx]], sizeof(int32_t));
+                    pref_handler.commit(pipline_state, &shared_buffer[shared_buffer_idx],
+                                        &ht_link[smem_r_tuple_id[shared_buffer_idx]], sizeof(int32_t));
+
+                    smem_state[shared_buffer_idx] = element_state_t::NEXT;
+                }
+            }
+        }
+    }
+    aggr_fn_global(aggr_local, o_aggr);
+}
+
 int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key, int32_t *s_payload, int32_t s_n, Config cfg)
 {
     int32_t *d_r_key = nullptr, *d_r_payload = nullptr;
@@ -548,7 +919,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key, int32_
     {
         CHKERR(cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
         int smem_size = (K * D + 1) * cfg.probe_blocksize * sizeof(int32_t);
-        probe_ht_1<<<cfg.probe_gridsize, cfg.probe_blocksize, smem_size, stream>>>(
+        probe_ht_smem_all<<<cfg.probe_gridsize, cfg.probe_blocksize, smem_size, stream>>>(
             d_s_key, d_s_payload, s_n, d_r_key, d_r_payload, d_ht_link, d_ht_slot, ht_size_log, d_aggr);
         CHKERR(cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
     }
