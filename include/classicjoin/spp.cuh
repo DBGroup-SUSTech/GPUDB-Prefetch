@@ -10,7 +10,7 @@ namespace classicjoin {
 namespace spp {
 
 struct ConfigSPP : public Config {
-  int method = 1; // one prefetch methods
+  int method = 4; // one prefetch methods
 };
 
 // TODO: use prefetch in build_ht
@@ -245,7 +245,102 @@ __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
                            int ht_size_log, int *o_aggr);
 
 __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
-                                int ht_size_log, int *o_aggr);
+                                int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+
+  extern __shared__ uint64_t v[]; // prefetch buffer
+
+  __shared__ fsm_shared_t fsm[STATE_NUM];
+  pipline_state_t pipline_state = pipline_state_t::NORMAL;
+  prefetch_handler_t pref_handler{};
+
+  int hash_virtual_id = 0;
+  int next_virtual_id = -D;
+  int match_virtual_id = -2 * D;
+
+  int rematch_virtual_s_tuple_id = -1;
+  int finish_num = 0;
+
+  int aggr_local = 0;
+
+  int idx = -1;
+
+  while (finish_num != PROBE_NUM) {
+    // hash stage:
+    idx = hash_virtual_id % STATE_NUM;
+    if (pipline_state != pipline_state_t::INTERRUPTION) {
+      ++hash_virtual_id;
+      if (hash_virtual_id <= PROBE_NUM) {
+        fsm[idx].state[threadIdx.x] = state_t::HASH;
+        fsm[idx].s_tuple[threadIdx.x] = s[tid + stride * (hash_virtual_id - 1)];
+        int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
+        pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
+                            sizeof(void *));
+        fsm[idx].state[threadIdx.x] = state_t::NEXT;
+      }
+      pipline_state = pipline_state_t::NORMAL;
+    }
+
+    // next stage
+    if (pipline_state == pipline_state_t::NORMAL) {
+      idx = next_virtual_id % STATE_NUM;
+      ++next_virtual_id;
+    } else {
+      idx = rematch_virtual_s_tuple_id % STATE_NUM;
+    }
+    if (pipline_state == pipline_state_t::INTERRUPTION ||
+        (pipline_state == pipline_state_t::NORMAL &&
+         (next_virtual_id <= PROBE_NUM) && next_virtual_id >= 1)) {
+      pref_handler.wait(pipline_state);
+      fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(idx));
+      if (fsm[idx].next[threadIdx.x]) {
+        fsm[idx].state[threadIdx.x] = state_t::MATCH;
+        pref_handler.commit(pipline_state, &VSMEM(idx), &(fsm[idx].next[threadIdx.x]->tuple),
+                            sizeof(Tuple));
+
+      } else {
+        ++finish_num;
+        fsm[idx].state[threadIdx.x] = state_t::DONE;
+        if (pipline_state == pipline_state_t::INTERRUPTION) {
+          pipline_state = pipline_state_t::RENORMAL;
+        }
+      }
+    }
+
+    // match stage
+    if (pipline_state != pipline_state_t::RENORMAL) {
+      if (pipline_state == pipline_state_t::NORMAL) {
+        idx = match_virtual_id % STATE_NUM;
+        ++match_virtual_id;
+      } else {
+        idx = rematch_virtual_s_tuple_id % STATE_NUM;
+      }
+      if (pipline_state == pipline_state_t::INTERRUPTION ||
+          (pipline_state == pipline_state_t::NORMAL &&
+           (match_virtual_id <= PROBE_NUM) && match_virtual_id >= 1)) {
+        if (fsm[idx].state[threadIdx.x] == state_t::MATCH) {
+          pref_handler.wait(pipline_state);
+          Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(idx));
+          if (r_tuple->k == fsm[idx].s_tuple[threadIdx.x].k) {
+            if (pipline_state == pipline_state_t::NORMAL) {
+              rematch_virtual_s_tuple_id = match_virtual_id - 1;
+            }
+            pipline_state = pipline_state_t::INTERRUPTION;
+            aggr_fn_local(r_tuple->v, fsm[idx].s_tuple[threadIdx.x].v, &aggr_local);
+          }
+          pref_handler.commit(pipline_state, &VSMEM(idx),
+                              &fsm[idx].next[threadIdx.x]->header, sizeof(void *));
+          fsm[idx].state[threadIdx.x] = state_t::NEXT;
+        }
+      }
+    }
+  }
+  aggr_fn_global(aggr_local, o_aggr);
+}
 
 // __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
 //   for (int i = 0; i < n; ++i) {
@@ -333,7 +428,6 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
                    stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else if (cfg.method == 4) {
-      assert(0);
       const int smeme_size = STATE_NUM * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
