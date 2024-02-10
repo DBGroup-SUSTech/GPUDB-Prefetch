@@ -2,9 +2,6 @@
 
 #include "classicjoin/common.cuh"
 #include "util/util.cuh"
-#include <cstdint>
-#include <cstdio>
-#include <fmt/core.h>
 
 namespace classicjoin {
 namespace spp {
