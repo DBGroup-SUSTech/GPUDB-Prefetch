@@ -1,4 +1,4 @@
 build/
 data/*
-.cache/
-.vscode/*
+tmp/*
+*.log
