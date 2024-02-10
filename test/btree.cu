@@ -105,7 +105,7 @@ TEST(unique, spp) {
   std::string key_fname = cutil::rel_fname(true, "key_uniq", n, 0);
   std::string val_fname = cutil::rel_fname(true, "val_uniq", n, 0);
   int64_t *keys = new int64_t[n];
-  int64_t *values = new int64_t[n];  // ? keys == values
+  int64_t *values = new int64_t[n];
 
   assert(!datagen::create_relation_unique(key_fname.c_str(), keys, n, n));
   assert(!datagen::create_relation_unique(val_fname.c_str(), values, n, n));

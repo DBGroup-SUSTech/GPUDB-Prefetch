@@ -85,7 +85,7 @@ __global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
 void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
-
+  
   // input
   int64_t *d_keys = nullptr, *d_values = nullptr;
   CHKERR(cutil::DeviceAlloc(d_keys, n));
