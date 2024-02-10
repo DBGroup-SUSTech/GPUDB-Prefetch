@@ -45,8 +45,8 @@ TEST(skew, naive) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  int els_per_thread = 4;
-  int threads_per_block = 512;
+  int els_per_thread = 8;
+  int threads_per_block = 128;
   classicjoin::Config config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -54,16 +54,17 @@ TEST(skew, naive) {
     config.build_gridsize = blocks_per_grid;
     config.build_blocksize = threads_per_block;
   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  //   config.build_blocksize = 256;
-  //   config.build_gridsize = 100;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 1;
+  { // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
+  
+  // config.build_blocksize = 256;
+  // config.build_gridsize = 100;
+  // config.probe_blocksize = 128;
+  // config.probe_gridsize = 1;
 
   fmt::print("Query:\n"
              "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
@@ -109,8 +110,8 @@ TEST(skew, amac) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  int els_per_thread = 4;
-  int threads_per_block = 512;
+  int els_per_thread = 8;
+  int threads_per_block = 128;
   classicjoin::amac::ConfigAMAC config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -191,7 +192,7 @@ TEST(skew, imv) {
   // config.build_blocksize = 256;
   // config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 1;
+  config.probe_gridsize = 72;
 
   fmt::print("Query:\n"
              "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
@@ -589,11 +590,6 @@ TEST(unique, spp) {
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
   assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
 
-  for (int i = 0; i < 16; i++) {
-    r_key[i] = 1;
-    s_key[i] = 1;
-  }
-
   fmt::print("Create relation R with {} tuples ({} MB) "
              "using unique keys\n",
              r_n, r_n * sizeof(int32_t) / 1024 / 1024);
@@ -623,15 +619,15 @@ TEST(unique, spp) {
     config.build_gridsize = blocks_per_grid;
     config.build_blocksize = threads_per_block;
   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
+  { // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
 
-  config.probe_blocksize = 2;
-  config.probe_gridsize = 1;
+  // config.probe_blocksize = 2;
+  // config.probe_gridsize = 1;
 
   fmt::print("Query:\n"
              "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
