@@ -100,10 +100,6 @@ __global__ void probe_ht(int32_t *s_key, int32_t *s_payload, int32_t s_n, int32_
     int32_t reg_r_tuple_id[G];
     // initial state is 0
     state_t reg_state[G];
-    int32_t reg_r_key = -1;
-    int32_t reg_r_payload = -1;
-
-    int32_t finish_match_num = 0;
 
     int ht_size = 1 << ht_size_log;
     int ht_mask = ht_size - 1;
