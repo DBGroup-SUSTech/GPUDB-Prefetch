@@ -147,22 +147,6 @@ __launch_bounds__(128, 1) //
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-__global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
-                           int ht_size_log, int *o_aggr);
-
-__global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
-                                int ht_size_log, int *o_aggr);
-
-// __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
-//   for (int i = 0; i < n; ++i) {
-//     printf("%d: %p\n", i, ht_slot[i].next);
-//   }
-// }
-// void print_ht(EntryHeader *d_ht_slot, int n) {
-//   print_ht_kernel<<<1, 1>>>(d_ht_slot, n);
-//   CHKERR(cudaDeviceSynchronize());
-// }
-
 int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
          int32_t *s_payload, int32_t s_n, ConfigGP cfg) {
   CHKERR(cudaDeviceReset());
@@ -232,18 +216,6 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_1<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
                    stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
-    } else if (cfg.method == 3) {
-      assert(0);
-      const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
-      fmt::print("smem_size = {}\n", smeme_size);
-      probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                   stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
-    } else if (cfg.method == 4) {
-      assert(0);
-      const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
-      fmt::print("smem_size = {}\n", smeme_size);
-      probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                        stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else {
       assert(0);
     }
