@@ -54,16 +54,16 @@ TEST(skew, naive) {
     config.build_gridsize = blocks_per_grid;
     config.build_blocksize = threads_per_block;
   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
+  {  // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 1;
+  //   config.probe_blocksize = 128;
+  //   config.probe_gridsize = 1;
 
   fmt::print(
       "Query:\n"
@@ -197,7 +197,7 @@ TEST(skew, imv) {
   // config.build_blocksize = 256;
   // config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 1;
+  config.probe_gridsize = 72;
 
   fmt::print(
       "Query:\n"
@@ -253,16 +253,16 @@ TEST(unique, naive) {
     config.build_gridsize = blocks_per_grid;
     config.build_blocksize = threads_per_block;
   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
+  {  // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  //   config.probe_blocksize = 128;
+  //   config.probe_gridsize = 72;
 
   fmt::print(
       "Query:\n"
@@ -318,12 +318,12 @@ TEST(unique, amac) {
     config.build_gridsize = blocks_per_grid;
     config.build_blocksize = threads_per_block;
   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
+  //   {  // probe kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+  //     config.probe_gridsize = blocks_per_grid;
+  //     config.probe_blocksize = threads_per_block;
+  //   }
   // config.build_blocksize = 256;
   // config.build_gridsize = 100;
   config.probe_blocksize = 128;
