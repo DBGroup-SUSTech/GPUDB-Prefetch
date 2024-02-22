@@ -38,9 +38,9 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
 }
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;               // prefetch distance & group size
-constexpr int PADDING = 1;             // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 128; // threads per block
+constexpr int PDIST = 8;              // prefetch distance & group size
+constexpr int PADDING = 1;            // solve bank conflict
+constexpr int THREADS_PER_BLOCK = 72; // threads per block
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
 
 // TODO: fsm_shared
@@ -103,6 +103,8 @@ __launch_bounds__(128, 1) //
         // prefetch
         pref.commit(&VSMEM(j), &ht_slot[hval], sizeof(void *));
         fsm[j].state = state_t::NEXT;
+      } else {
+        finish_match_num ++;
       }
     }
     while (finish_match_num != PDIST) {

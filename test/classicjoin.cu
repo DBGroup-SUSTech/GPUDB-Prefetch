@@ -238,7 +238,7 @@ TEST(skew, gp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 64;
-  int threads_per_block = 128;
+  int threads_per_block = 72;
   classicjoin::gp::ConfigGP config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -302,7 +302,7 @@ TEST(skew, spp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 512;
-  int threads_per_block = 128;
+  int threads_per_block = 72;
   classicjoin::spp::ConfigSPP config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -550,7 +550,7 @@ TEST(unique, gp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 16;
-  int threads_per_block = 128;
+  int threads_per_block = 72;
   classicjoin::gp::ConfigGP config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -566,8 +566,8 @@ TEST(unique, gp) {
   // }
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
-    config.probe_blocksize = 128;
-    config.probe_gridsize = 64;
+    config.probe_blocksize = 72;
+    config.probe_gridsize = 128;
 
   fmt::print("Query:\n"
              "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
@@ -612,7 +612,7 @@ TEST(unique, spp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 512;
-  int threads_per_block = 128;
+  int threads_per_block = 72;
   classicjoin::spp::ConfigSPP config;
   { // build kernel
     const int els_per_block = threads_per_block * els_per_thread;

@@ -43,8 +43,8 @@ constexpr int K = 2;                 // the number of code stage (0,1, ...K)
 constexpr int D = 4;                 // iteration distance
 constexpr int STATE_NUM = K * D + 1; // state number
 constexpr int PROBE_NUM = 512;
-constexpr int PADDING = 1;             // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 128; // threads per block
+constexpr int PADDING = 1;            // solve bank conflict
+constexpr int THREADS_PER_BLOCK = 72; // threads per block
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
 
 // TODO: fsm_shared
@@ -62,7 +62,7 @@ enum class state_t : int {
 
 enum class pipline_state_t : int {
   NORMAL = 0,   // pipeline is running without any interruption
-  INTERRUPTION, // pipline is interrupted by PAYLOAD
+  INTERRUPTION, // pipline is interrupted by MATCH
   RENORMAL,     // pipline will be normal in next itr
 };
 
@@ -140,11 +140,16 @@ __launch_bounds__(128, 1) //
       ++hash_virtual_id;
       if (hash_virtual_id <= PROBE_NUM) {
         fsm[idx].state = state_t::HASH;
-        fsm[idx].s_tuple = s[tid + stride * (hash_virtual_id - 1)];
-        int hval = fsm[idx].s_tuple.k & ht_mask;
-        pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
-                            sizeof(void *));
-        fsm[idx].state = state_t::NEXT;
+        if (tid + stride * (hash_virtual_id - 1) < s_n) {
+          fsm[idx].s_tuple = s[tid + stride * (hash_virtual_id - 1)];
+          int hval = fsm[idx].s_tuple.k & ht_mask;
+          pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
+                              sizeof(void *));
+          fsm[idx].state = state_t::NEXT;
+        } else {
+          finish_num++;
+          fsm[idx].state = state_t::DONE;
+        }
       }
       pipline_state = pipline_state_t::NORMAL;
     }
@@ -159,18 +164,20 @@ __launch_bounds__(128, 1) //
     if (pipline_state == pipline_state_t::INTERRUPTION ||
         (pipline_state == pipline_state_t::NORMAL &&
          (next_virtual_id <= PROBE_NUM) && next_virtual_id >= 1)) {
-      pref_handler.wait(pipline_state);
-      fsm[idx].next = reinterpret_cast<Entry *>(VSMEM(idx));
-      if (fsm[idx].next) {
-        fsm[idx].state = state_t::MATCH;
-        pref_handler.commit(pipline_state, &VSMEM(idx), &(fsm[idx].next->tuple),
-                            sizeof(Tuple));
+      if (fsm[idx].state == state_t::NEXT) {
+        pref_handler.wait(pipline_state);
+        fsm[idx].next = reinterpret_cast<Entry *>(VSMEM(idx));
+        if (fsm[idx].next) {
+          fsm[idx].state = state_t::MATCH;
+          pref_handler.commit(pipline_state, &VSMEM(idx),
+                              &(fsm[idx].next->tuple), sizeof(Tuple));
 
-      } else {
-        ++finish_num;
-        fsm[idx].state = state_t::DONE;
-        if (pipline_state == pipline_state_t::INTERRUPTION) {
-          pipline_state = pipline_state_t::RENORMAL;
+        } else {
+          ++finish_num;
+          fsm[idx].state = state_t::DONE;
+          if (pipline_state == pipline_state_t::INTERRUPTION) {
+            pipline_state = pipline_state_t::RENORMAL;
+          }
         }
       }
     }
@@ -238,11 +245,17 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
       ++hash_virtual_id;
       if (hash_virtual_id <= PROBE_NUM) {
         fsm[idx].state[threadIdx.x] = state_t::HASH;
-        fsm[idx].s_tuple[threadIdx.x] = s[tid + stride * (hash_virtual_id - 1)];
-        int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
-        pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
-                            sizeof(void *));
-        fsm[idx].state[threadIdx.x] = state_t::NEXT;
+        if (tid + stride * (hash_virtual_id - 1) < s_n) {
+          fsm[idx].s_tuple[threadIdx.x] =
+              s[tid + stride * (hash_virtual_id - 1)];
+          int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
+          pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
+                              sizeof(void *));
+          fsm[idx].state[threadIdx.x] = state_t::NEXT;
+        } else {
+          finish_num++;
+          fsm[idx].state[threadIdx.x] = state_t::DONE;
+        }
       }
       pipline_state = pipline_state_t::NORMAL;
     }
@@ -257,18 +270,21 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
     if (pipline_state == pipline_state_t::INTERRUPTION ||
         (pipline_state == pipline_state_t::NORMAL &&
          (next_virtual_id <= PROBE_NUM) && next_virtual_id >= 1)) {
-      pref_handler.wait(pipline_state);
-      fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(idx));
-      if (fsm[idx].next[threadIdx.x]) {
-        fsm[idx].state[threadIdx.x] = state_t::MATCH;
-        pref_handler.commit(pipline_state, &VSMEM(idx), &(fsm[idx].next[threadIdx.x]->tuple),
-                            sizeof(Tuple));
+      if (fsm[idx].state[threadIdx.x] == state_t::NEXT) {
+        pref_handler.wait(pipline_state);
+        fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(idx));
+        if (fsm[idx].next[threadIdx.x]) {
+          fsm[idx].state[threadIdx.x] = state_t::MATCH;
+          pref_handler.commit(pipline_state, &VSMEM(idx),
+                              &(fsm[idx].next[threadIdx.x]->tuple),
+                              sizeof(Tuple));
 
-      } else {
-        ++finish_num;
-        fsm[idx].state[threadIdx.x] = state_t::DONE;
-        if (pipline_state == pipline_state_t::INTERRUPTION) {
-          pipline_state = pipline_state_t::RENORMAL;
+        } else {
+          ++finish_num;
+          fsm[idx].state[threadIdx.x] = state_t::DONE;
+          if (pipline_state == pipline_state_t::INTERRUPTION) {
+            pipline_state = pipline_state_t::RENORMAL;
+          }
         }
       }
     }
@@ -292,10 +308,12 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
               rematch_virtual_s_tuple_id = match_virtual_id - 1;
             }
             pipline_state = pipline_state_t::INTERRUPTION;
-            aggr_fn_local(r_tuple->v, fsm[idx].s_tuple[threadIdx.x].v, &aggr_local);
+            aggr_fn_local(r_tuple->v, fsm[idx].s_tuple[threadIdx.x].v,
+                          &aggr_local);
           }
           pref_handler.commit(pipline_state, &VSMEM(idx),
-                              &fsm[idx].next[threadIdx.x]->header, sizeof(void *));
+                              &fsm[idx].next[threadIdx.x]->header,
+                              sizeof(void *));
           fsm[idx].state[threadIdx.x] = state_t::NEXT;
         }
       }
@@ -377,7 +395,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       const int smeme_size = STATE_NUM * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                   stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+                        stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else {
       assert(0);
     }
