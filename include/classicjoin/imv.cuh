@@ -10,6 +10,41 @@ struct ConfigIMV : public Config {
   int method = 1;  // all lane has its own states in shared memory
 };
 
+// for prefetch  ---------------------------------------------------------
+constexpr int PDIST = 8;  // prefetch distance & group size
+constexpr int WARPS_PER_BLOCK = 4;
+constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * 32;  // warps per thread
+#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+constexpr unsigned MASK_ALL_LANES = 0xFFFFFFFF;
+
+namespace build {
+enum class state_t : int {
+  HASH = 1,
+  INSERT = 2,
+  DONE = 4,
+};
+
+// struct fsm_t {
+//   Tuple s_tuple;  // 8 Byte
+//   Entry *next;    // 8 Byte
+//   state_t state;  // 4 Byte
+// };
+
+// struct fsm_shared_t {
+//   // lane private states
+//   Tuple s_tuple[THREADS_PER_BLOCK];
+//   Entry *next[THREADS_PER_BLOCK];
+//   // warp private states
+//   state_t state[THREADS_PER_BLOCK];
+//   bool active[THREADS_PER_BLOCK];  // TODO: buffering it in register
+// };
+struct fsm_shared_t {
+  Tuple r_tuple[THREADS_PER_BLOCK];
+  Entry *entry[THREADS_PER_BLOCK];
+  state_t state[THREADS_PER_BLOCK];
+  bool active[THREADS_PER_BLOCK];
+};  // namespace build
+
 // TODO: use prefetch in build_ht
 /// @brief
 /// @param r            R relation
@@ -20,6 +55,77 @@ struct ConfigIMV : public Config {
 /// @return
 __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
                          EntryHeader *ht_slot, int ht_size_log) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  assert(blockDim.x == THREADS_PER_BLOCK);
+
+  __shared__ build::fsm_shared_t fsm[PDIST];
+  for (int k = 0; k < PDIST; ++k) {
+    fsm[k].state[threadIdx.x] = build::state_t::HASH;
+  }
+
+  extern __shared__ uint64_t v[];  // prefetch buffer
+
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+
+  while (all_done < PDIST) {
+    k = (k == PDIST) ? 0 : k;
+    switch (fsm[k].state[threadIdx.x]) {
+      case build::state_t::HASH: {
+        bool active = (i < r_n);
+        int active_mask = __ballot_sync(MASK_ALL_LANES, active);
+
+        if (active_mask) {
+          if (active) {
+            fsm[k].r_tuple[threadIdx.x] = r[i];
+            fsm[k].entry[threadIdx.x] = &entries[i];
+            i += stride;
+            int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
+
+            pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+          }
+
+          __syncwarp();
+
+          fsm[k].state[threadIdx.x] = build::state_t::INSERT;
+          fsm[k].active[threadIdx.x] = active;
+        } else {
+          fsm[k].state[threadIdx.x] = build::state_t::DONE;
+          ++all_done;
+        }
+        break;
+      }
+
+      case build::state_t::INSERT: {
+        bool active = fsm[k].active[threadIdx.x];
+
+        if (active) {
+          pref.wait();
+          auto entry = fsm[k].entry[threadIdx.x];
+          int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
+          auto last = gutil::atomic_exch_64(&ht_slot[hval].next, entry);
+          entry->tuple = fsm[k].r_tuple[threadIdx.x];
+          entry->header.next = last;
+        }
+
+        __syncwarp();
+        fsm[k].state[threadIdx.x] = build::state_t::HASH;
+        break;
+      }
+      default:
+        break;
+    }
+    ++k;
+  }
+}
+
+__global__ void build_ht_naive(Tuple *r, Entry *entries, int r_n,
+                               EntryHeader *ht_slot, int ht_size_log) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -36,14 +142,9 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
     entry->header.next = last;
   }
 }
+}  // namespace build
 
-// for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;  // prefetch distance & group size
-constexpr int WARPS_PER_THREAD = 4;
-constexpr int THREADS_PER_BLOCK = WARPS_PER_THREAD * 32;  // warps per thread
-#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
-constexpr unsigned MASK_ALL_LANES = 0xFFFFFFFF;
-
+namespace probe {
 enum class state_t : int {
   HASH = 0,   // get new tuple, prefetch Next
   NEXT = 1,   // get Next*, prefetch Entry.tuple
@@ -66,6 +167,7 @@ struct fsm_shared_t {
   state_t state[THREADS_PER_BLOCK];
   bool active[THREADS_PER_BLOCK];  // TODO: buffering it in register
 };
+}  // namespace probe
 
 /// @brief
 /// @param s           S relation
@@ -92,13 +194,13 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
   unsigned prefixlanes = 0xffffffff >> (32 - warplane);
 
   // shared memory data for IMV
-  __shared__ fsm_shared_t fsm[PDIST];  // states
+  __shared__ probe::fsm_shared_t fsm[PDIST];  // states
   for (int k = 0; k < PDIST; ++k) {
-    fsm[k].state[threadIdx.x] = state_t::HASH;
+    fsm[k].state[threadIdx.x] = probe::state_t::HASH;
     fsm[k].active[threadIdx.x] = false;
   }
-  __shared__ fsm_shared_t rvs;     // RVS in IMV paper
-  extern __shared__ uint64_t v[];  // prefetch buffer
+  __shared__ probe::fsm_shared_t rvs;  // RVS in IMV paper
+  extern __shared__ uint64_t v[];      // prefetch buffer
 
   int8_t rvs_cnt;  // number of active lanes in rvs
 
@@ -115,7 +217,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
 
     // transfer states
     switch (fsm[k].state[threadIdx.x]) {
-      case state_t::HASH: {
+      case probe::state_t::HASH: {
         bool active = (i < s_n);
         int active_mask = __ballot_sync(MASK_ALL_LANES, active);
 
@@ -134,18 +236,18 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
 
           __syncwarp();
 
-          fsm[k].state[threadIdx.x] = state_t::NEXT;
+          fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
           fsm[k].active[threadIdx.x] = active;
 
         } else {
-          fsm[k].state[threadIdx.x] = state_t::DONE;
+          fsm[k].state[threadIdx.x] = probe::state_t::DONE;
           ++all_done;
         }
 
         break;
       }
 
-      case state_t::NEXT: {
+      case probe::state_t::NEXT: {
         bool active = fsm[k].active[threadIdx.x];
 
         if (active) {
@@ -176,7 +278,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           rvs_cnt += active_cnt;
 
           // empty, switch to hash
-          fsm[k].state[threadIdx.x] = state_t::HASH;
+          fsm[k].state[threadIdx.x] = probe::state_t::HASH;
           fsm[k].active[threadIdx.x] = false;
           --k;
 
@@ -199,13 +301,13 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           // pref.commit_k(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8, k,
           //               (int)state_t::NEXT);
           // full, switch to match
-          fsm[k].state[threadIdx.x] = state_t::MATCH;
+          fsm[k].state[threadIdx.x] = probe::state_t::MATCH;
           fsm[k].active[threadIdx.x] = true;
         }
         break;
       }
 
-      case state_t::MATCH: {
+      case probe::state_t::MATCH: {
         bool active = fsm[k].active[threadIdx.x];
 
         if (active) {
@@ -224,7 +326,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
         pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
         // pref.commit_k(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8, k,
         //               (int)state_t::MATCH);
-        fsm[k].state[threadIdx.x] = state_t::NEXT;
+        fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
 
         break;
       }
@@ -322,8 +424,12 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   {
     CHKERR(
         cudaEventRecordWithFlags(start_build, stream, cudaEventRecordExternal));
-    build_ht<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
-        d_r, d_entries, r_n, d_ht_slot, ht_size_log);
+    const int smeme_size = PDIST * cfg.build_blocksize * sizeof(uint64_t);
+    build::build_ht<<<cfg.build_gridsize, cfg.build_blocksize, smeme_size,
+                      stream>>>(d_r, d_entries, r_n, d_ht_slot, ht_size_log);
+    // build::build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize,
+    // smeme_size,
+    //                   stream>>>(d_r, d_entries, r_n, d_ht_slot, ht_size_log);
     CHKERR(
         cudaEventRecordWithFlags(end_build, stream, cudaEventRecordExternal));
   }
@@ -370,5 +476,4 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
 }
 
 }  // namespace imv
-
 }  // namespace classicjoin
