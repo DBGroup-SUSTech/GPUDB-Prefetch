@@ -12,12 +12,18 @@
 
 namespace btree {
 namespace naive {
-__device__ __forceinline__ void get(int64_t key, int64_t &value,
-                                    const Node *root) {
-  const Node *node = root;
+constexpr int LANES_PER_WARP = 8;  // or 8
+
+__device__ __forceinline__ void get(
+    int32_t key, int32_t &value, const NodePtr root_ptr,
+    DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+  NodePtr node_ptr = root_ptr;
+  const Node *node = node_ptr.to_ptr<Node>(node_allocator);
   while (node->type == Node::Type::INNER) {
+    // printf("node == inner\n");
     const InnerNode *inner = static_cast<const InnerNode *>(node);
-    node = inner->children[inner->lower_bound(key)];
+    node_ptr = inner->children[inner->lower_bound(key)];
+    node = node_ptr.to_ptr<Node>(node_allocator);
   }
   const LeafNode *leaf = static_cast<const LeafNode *>(node);
   int pos = leaf->lower_bound(key);
@@ -30,28 +36,36 @@ __device__ __forceinline__ void get(int64_t key, int64_t &value,
   return;
 }
 
-__global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
-                              const Node *const *root_p) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int stride = blockDim.x * gridDim.x;
-  for (int i = tid; i < n; i += stride) {
-    get(keys[i], values[i], *root_p);
+__global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
+                              const NodePtr *root_p,
+                              DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
+  // int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int warpid = threadIdx.x / 32;
+  int warplane = threadIdx.x % 32;
+  if (warplane >= LANES_PER_WARP) return;
+
+  int lid = warpid * LANES_PER_WARP + warplane;  // lane id
+  int lanes_per_block = blockDim.x / 32 * LANES_PER_WARP;
+  int stride = lanes_per_block * gridDim.x;
+
+  for (int i = lanes_per_block * blockIdx.x + lid; i < n; i += stride) {
+    get(keys[i], values[i], *root_p, node_allocator);
   }
 }
 
-void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
+void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
 
   // input
-  int64_t *d_keys = nullptr, *d_values = nullptr;
+  int32_t *d_keys = nullptr, *d_values = nullptr;
   CHKERR(cutil::DeviceAlloc(d_keys, n));
   CHKERR(cutil::DeviceAlloc(d_values, n));
   CHKERR(cutil::CpyHostToDevice(d_keys, keys, n));
   CHKERR(cutil::CpyHostToDevice(d_values, values, n));
 
   // output
-  int64_t *d_outs = nullptr;
+  int32_t *d_outs = nullptr;
   CHKERR(cutil::DeviceAlloc(d_outs, n));
   CHKERR(cutil::DeviceSet(d_outs, 0, n));
 
@@ -87,7 +101,7 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
     CHKERR(
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
     gets_parallel<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
-        d_keys, n, d_outs, tree.d_root_p_);
+        d_keys, n, d_outs, tree.d_root_p_, tree.allocator_);
     CHKERR(
         cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
   }
@@ -108,7 +122,7 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
       ms_build, n * 1.0 / ms_build * 1000, ms_probe, n * 1.0 / ms_probe * 1000);
 
   // check output
-  int64_t *outs = new int64_t[n];
+  int32_t *outs = new int32_t[n];
   CHKERR(cutil::CpyDeviceToHost(outs, d_outs, n));
   for (int i = 0; i < n; ++i) {
     assert(outs[i] == values[i]);

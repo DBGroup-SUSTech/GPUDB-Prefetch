@@ -16,13 +16,13 @@ constexpr unsigned MASK_ALL_LANES = 0xFFFFFFFF;
 #define VSMEM_4(index) v[index * LANES_PER_BLOCK + lid]
 
 enum class state_t : int8_t {
-  INIT = 0,    // prefetch root nodej j
+  INIT = 0,    // prefetch root node
   SEARCH = 1,  // search in a node, prefetch child
   DONE = 2,    // fetch next
 };
 
 struct fsm_shared_4_t {
-  int64_t key[LANES_PER_BLOCK];
+  int32_t key[LANES_PER_BLOCK];
   // const Node *next[THREADS_PER_BLOCK];
   int i[LANES_PER_BLOCK];
   state_t state[LANES_PER_BLOCK];
@@ -30,8 +30,9 @@ struct fsm_shared_4_t {
 };
 
 __launch_bounds__(128, 1)  //
-    __global__ void gets_imv(int64_t *keys, int n, int64_t *values,
-                             const Node *const *root_p) {
+    __global__ void gets_imv(int32_t *keys, int n, int32_t *values,
+                             const NodePtr *const root_p,
+                             DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
   int warpid = threadIdx.x / 32;
   int warplane = threadIdx.x % 32;
   bool enable = (warplane < LANES_PER_WARP);
@@ -76,7 +77,8 @@ __launch_bounds__(128, 1)  //
 
             fsm[k].i[lid] = i;
             i += stride;
-            pref.commit(&VSMEM_4(k), *root_p);
+            pref.commit(&VSMEM_4(k),
+                        (*root_p).to_ptr<InnerNode>(node_allocator));
           }
 
           __syncwarp();
@@ -108,7 +110,8 @@ __launch_bounds__(128, 1)  //
             assert(node->type == Node::Type::INNER);
             auto inner = static_cast<const InnerNode *>(node);
             int pos = inner->lower_bound(fsm[k].key[lid]);
-            pref.commit(&VSMEM_4(k), inner->children[pos]);
+            pref.commit(&VSMEM_4(k),
+                        inner->children[pos].to_ptr<InnerNode>(node_allocator));
           }
 
           __syncwarp();
@@ -145,19 +148,19 @@ __launch_bounds__(128, 1)  //
   }
 }
 
-void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
+void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
 
   // input
-  int64_t *d_keys = nullptr, *d_values = nullptr;
+  int32_t *d_keys = nullptr, *d_values = nullptr;
   CHKERR(cutil::DeviceAlloc(d_keys, n));
   CHKERR(cutil::DeviceAlloc(d_values, n));
   CHKERR(cutil::CpyHostToDevice(d_keys, keys, n));
   CHKERR(cutil::CpyHostToDevice(d_values, values, n));
 
   // output
-  int64_t *d_outs = nullptr;
+  int32_t *d_outs = nullptr;
   CHKERR(cutil::DeviceAlloc(d_outs, n));
   CHKERR(cutil::DeviceSet(d_outs, 0, n));
 
@@ -194,7 +197,7 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
 
     gets_imv<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
-        d_keys, n, d_outs, tree.d_root_p_);
+        d_keys, n, d_outs, tree.d_root_p_, tree.allocator_);
   }
   CHKERR(cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
 
@@ -214,7 +217,7 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
       ms_build, n * 1.0 / ms_build * 1000, ms_probe, n * 1.0 / ms_probe * 1000);
 
   // check output
-  int64_t *outs = new int64_t[n];
+  int32_t *outs = new int32_t[n];
   CHKERR(cutil::CpyDeviceToHost(outs, d_outs, n));
   for (int i = 0; i < n; ++i) {
     // fmt::print("{}-{}\n", outs[i], values[i]);
