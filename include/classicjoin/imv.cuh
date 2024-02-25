@@ -1,7 +1,10 @@
 #pragma once
+#include <cooperative_groups.h>
 
 #include "classicjoin/common.cuh"
 #include "util/util.cuh"
+
+namespace cg = cooperative_groups;
 
 namespace classicjoin {
 namespace imv {
@@ -176,9 +179,9 @@ struct fsm_shared_t {
 /// @param ht_size_log log2(htsize)
 /// @param entries     hash table entries
 /// @return
-__launch_bounds__(128, 1)  // assert blockDim.x == 128
-    __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
-                               int ht_size_log, int *o_aggr) {
+// __launch_bounds__(128, 2)  // assert blockDim.x == 128
+__global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
+                           int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
@@ -187,6 +190,9 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
   int i = tid;
 
   assert(blockDim.x == THREADS_PER_BLOCK);
+
+  cg::thread_block_tile<32> warp =
+      cg::tiled_partition<32>(cg::this_thread_block());
 
   // warp info
   unsigned warpid = threadIdx.x / 32;
@@ -202,7 +208,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
   __shared__ probe::fsm_shared_t rvs;  // RVS in IMV paper
   extern __shared__ uint64_t v[];      // prefetch buffer
 
-  int8_t rvs_cnt;  // number of active lanes in rvs
+  int8_t rvs_cnt = 0;  // number of active lanes in rvs
 
   // prefetch primitives from AMAC
   prefetch_t pref{};
@@ -214,7 +220,8 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
   // fully vectorized loops
   while (all_done < PDIST) {
     k = ((k == PDIST) ? 0 : k);
-
+    warp.sync();
+    // assert(__activemask() == MASK_ALL_LANES);
     // transfer states
     switch (fsm[k].state[threadIdx.x]) {
       case probe::state_t::HASH: {
@@ -234,7 +241,7 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
             // (int)state_t::HASH);
           }
 
-          __syncwarp();
+          warp.sync();
 
           fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
           fsm[k].active[threadIdx.x] = active;
@@ -243,6 +250,8 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           fsm[k].state[threadIdx.x] = probe::state_t::DONE;
           ++all_done;
         }
+
+        // assert(__activemask() == MASK_ALL_LANES);
 
         break;
       }
@@ -261,11 +270,19 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           // fsm[k].next[threadIdx.x]);
         }
 
-        __syncwarp();
+        warp.sync();
+        // assert(__activemask() == MASK_ALL_LANES);
 
         // integration
         int active_mask = __ballot_sync(MASK_ALL_LANES, active);
         int active_cnt = __popc(active_mask);
+
+        // {
+        //   int sum = rvs_cnt;
+        //   int flag = (sum == __shfl_sync(MASK_ALL_LANES, sum, 0));
+        //   int same_mask = __ballot_sync(MASK_ALL_LANES, flag);
+        //   assert(same_mask == MASK_ALL_LANES);
+        // };
 
         if (active_cnt + rvs_cnt < 32) {  // empty
           int prefix_cnt = __popc(active_mask & prefixlanes);
@@ -274,6 +291,9 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
             rvs.s_tuple[offset] = fsm[k].s_tuple[threadIdx.x];
             rvs.next[offset] = fsm[k].next[threadIdx.x];
           }
+
+          warp.sync();
+          // assert(__activemask() == MASK_ALL_LANES);
 
           rvs_cnt += active_cnt;
 
@@ -294,6 +314,9 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
             //        "Line 179 misaligned");
           }
 
+          warp.sync();
+          // assert(__activemask() == MASK_ALL_LANES);
+
           rvs_cnt = remain_cnt;
           // printf("k=%d,tid=%d, FULL, rvs_cnt = %d\n", k, tid, rvs_cnt);
 
@@ -304,6 +327,10 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
           fsm[k].state[threadIdx.x] = probe::state_t::MATCH;
           fsm[k].active[threadIdx.x] = true;
         }
+
+        warp.sync();
+        // assert(__activemask() == MASK_ALL_LANES);
+
         break;
       }
 
@@ -322,11 +349,15 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
             aggr_fn_local(r_tuple->v, s_tuple->v, &aggr_local);
           }
         }
+        warp.sync();
+        // assert(__activemask() == MASK_ALL_LANES);
 
         pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
         // pref.commit_k(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8, k,
         //               (int)state_t::MATCH);
         fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
+        warp.sync();
+        // assert(__activemask() == MASK_ALL_LANES);
 
         break;
       }
@@ -336,8 +367,9 @@ __launch_bounds__(128, 1)  // assert blockDim.x == 128
     ++k;
   }
 
-  /// @note without __syncwarp there will be errors
-  __syncwarp();
+  /// @note without warp.sync() there will be errors
+  warp.sync();
+  // assert(__activemask() == MASK_ALL_LANES);
 
   // handle RVS
   if (warplane < rvs_cnt) {
