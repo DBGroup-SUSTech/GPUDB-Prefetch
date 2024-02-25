@@ -266,7 +266,7 @@ TEST(skew, gp) {
   // config.build_blocksize = 256;
   // config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 64;
+  config.probe_gridsize = 72;
 
   fmt::print(
       "Query:\n"
@@ -333,7 +333,7 @@ TEST(skew, spp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 64;
+  config.probe_gridsize = 72;
 
   fmt::print(
       "Query:\n"
@@ -593,7 +593,7 @@ TEST(unique, gp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 128;
+  config.probe_gridsize = 72;
 
   fmt::print(
       "Query:\n"
