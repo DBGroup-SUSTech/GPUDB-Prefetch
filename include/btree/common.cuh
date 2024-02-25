@@ -6,6 +6,33 @@
 #include "util/util.cuh"
 
 namespace btree {
+
+struct Node;
+struct InnerNode;
+struct LeafNode;
+
+struct NodePtr {
+  int offset_;
+  __device__ __forceinline__ NodePtr(int32_t offset) : offset_(offset) {}
+  __device__ __forceinline__ NodePtr(const NodePtr &ptr) : offset_(ptr.offset_) {}
+
+  __device__ __forceinline__ NodePtr(){};
+
+  template <typename T>
+  __device__ __forceinline__ T *to_ptr(
+      DynamicAllocator<ALLOC_CAPACITY> &node_allocator) const;
+
+  __device__ __forceinline__ bool operator==(NodePtr ptr) {
+    return ptr.offset_ == offset_;
+  }
+  __device__ __forceinline__ bool operator!=(NodePtr ptr) {
+    return ptr.offset_ != offset_;
+  }
+  __device__ __forceinline__ NodePtr &operator=(const NodePtr &ptr) {
+    offset_ = ptr.offset_;
+  }
+};
+
 struct Node {
   enum class Type : int { NONE = 0, INNER, LEAF };
   gutil::ull_t version_lock_obsolete;
@@ -51,20 +78,21 @@ struct Node {
 };
 
 struct InnerNode : public Node {
-  static const int MAX_ENTRIES = 6;  // TODO: the best case of MAX_ENTRIES for naive is >= 16
+  static const int MAX_ENTRIES =
+      14;  // TODO: the best case of MAX_ENTRIES for naive is >= 16
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
 
-  Node *children[MAX_ENTRIES];
-  int64_t keys[MAX_ENTRIES];
+  int32_t keys[MAX_ENTRIES];
+  NodePtr children[MAX_ENTRIES];
 
   __device__ __forceinline__ bool is_full() const {
     return n_key == MAX_ENTRIES - 1;
   }
 
   // return the position to insert, equal to binary search
-  __device__ __forceinline__ int lower_bound(int64_t key) const {
+  __device__ __forceinline__ int lower_bound(int32_t key) const {
     int lower = 0;
     int upper = n_key;
     while (lower < upper) {
@@ -81,9 +109,10 @@ struct InnerNode : public Node {
     return lower;
   }
 
-  __device__ __forceinline__ InnerNode *split_alloc(
-      int64_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
-    InnerNode *new_inner = node_allocator.malloc<InnerNode>();
+  __device__ __forceinline__ NodePtr
+  split_alloc(int32_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+    NodePtr ptr = node_allocator.malloc_obj<InnerNode>();
+    InnerNode *new_inner = ptr.to_ptr<InnerNode>(node_allocator);
     new_inner->type = Node::Type::INNER;
 
     new_inner->n_key = n_key / 2;
@@ -91,26 +120,26 @@ struct InnerNode : public Node {
     sep = keys[n_key];
     // copy n keys and n + 1 childs
     memcpy(new_inner->keys, keys + n_key + 1,
-           sizeof(int64_t) * new_inner->n_key);
+           sizeof(int32_t) * new_inner->n_key);
     memcpy(new_inner->children, children + n_key + 1,
-           sizeof(Node *) * (new_inner->n_key + 1));
-    return new_inner;
+           sizeof(NodePtr) * (new_inner->n_key + 1));
+    return ptr;
   }
 
-  __device__ __forceinline__ void insert(int64_t key, Node *child) {
+  __device__ __forceinline__ void insert(int32_t key, NodePtr child) {
     assert(n_key < MAX_ENTRIES - 1);
     int pos = lower_bound(key);
     util::memmove_forward(keys + pos + 1, keys + pos,
-                          sizeof(int64_t) * (n_key - pos));
+                          sizeof(int32_t) * (n_key - pos));
     util::memmove_forward(children + pos + 1, children + pos,
-                          sizeof(Node *) * (n_key + 1 - pos));
+                          sizeof(NodePtr) * (n_key + 1 - pos));
     // assert(pos < MAX_ENTRIES);
     keys[pos] = key;
     children[pos] = child;
 
     // printf("children %p\n", children);
     // assert(pos < MAX_ENTRIES && pos >= 0);
-    // assert(((uint64_t)children) % 8 == 0);
+    // assert(((uint32_t)children) % 8 == 0);
     auto tmp = children[pos];
     children[pos] = children[pos + 1];
     children[pos + 1] = tmp;
@@ -120,18 +149,18 @@ struct InnerNode : public Node {
 };
 
 struct LeafNode : public Node {
-  static const int MAX_ENTRIES = 6;
+  static const int MAX_ENTRIES = 14;
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
-  int64_t keys[MAX_ENTRIES];
-  int64_t values[MAX_ENTRIES];
+  int32_t keys[MAX_ENTRIES];
+  int32_t values[MAX_ENTRIES];
 
   __device__ __forceinline__ bool is_full() const {
     return n_key == MAX_ENTRIES;
   }
 
-  __device__ __forceinline__ int lower_bound(int64_t key) const {
+  __device__ __forceinline__ int lower_bound(int32_t key) const {
     int lower = 0;
     int upper = n_key;
     while (lower < upper) {
@@ -150,22 +179,25 @@ struct LeafNode : public Node {
     return lower;
   }
 
-  __device__ __forceinline__ LeafNode *split_alloc(
-      int64_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
-    LeafNode *new_leaf = node_allocator.malloc<LeafNode>();
+  __device__ __forceinline__ NodePtr
+  split_alloc(int32_t &sep, DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+    // LeafNode *new_leaf = node_allocator.malloc<LeafNode>();
+
+    NodePtr ptr = node_allocator.malloc_obj<LeafNode>();
+    LeafNode *new_leaf = ptr.to_ptr<LeafNode>(node_allocator);
     new_leaf->type = Node::Type::LEAF;
     new_leaf->n_key = n_key / 2;
     n_key = n_key - new_leaf->n_key;
 
     sep = keys[n_key - 1];
 
-    memcpy(new_leaf->keys, keys + n_key, sizeof(int64_t) * new_leaf->n_key);
-    memcpy(new_leaf->values, values + n_key, sizeof(int64_t) * new_leaf->n_key);
+    memcpy(new_leaf->keys, keys + n_key, sizeof(int32_t) * new_leaf->n_key);
+    memcpy(new_leaf->values, values + n_key, sizeof(int32_t) * new_leaf->n_key);
 
-    return new_leaf;
+    return ptr;
   }
 
-  __device__ __forceinline__ void insert(int64_t key, int64_t value) {
+  __device__ __forceinline__ void insert(int32_t key, int32_t value) {
     if (n_key) {
       // printf("n_key = %d\n", n_key);
       int pos = lower_bound(key);
@@ -176,9 +208,9 @@ struct LeafNode : public Node {
         return;
       }
       util::memmove_forward(keys + pos + 1, keys + pos,
-                            sizeof(int64_t) * (n_key - pos));
+                            sizeof(int32_t) * (n_key - pos));
       util::memmove_forward(values + pos + 1, values + pos,
-                            sizeof(int64_t) * (n_key - pos));
+                            sizeof(int32_t) * (n_key - pos));
       keys[pos] = key;
       values[pos] = value;
     } else {
@@ -189,22 +221,32 @@ struct LeafNode : public Node {
   }
 };
 
-__global__ void allocate_root(Node **root_p) {
+__global__ void allocate_root(NodePtr *root_p,
+                              DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
   assert(blockDim.x == 1 && gridDim.x == 1);
-  LeafNode *root = new LeafNode{};
+  NodePtr root_ptr = node_allocator.malloc_obj<LeafNode>();
+  LeafNode *root = root_ptr.to_ptr<LeafNode>(node_allocator);
   root->type = Node::Type::LEAF;
-  *root_p = root;
+  *root_p = root_ptr;
+}
+
+template <typename T>
+__device__ __forceinline__ T *NodePtr::to_ptr(
+    DynamicAllocator<ALLOC_CAPACITY> &node_allocator) const {
+  return reinterpret_cast<T *>(
+      reinterpret_cast<InnerNode *>(node_allocator.get_started_ptr()) +
+      offset_);
 }
 
 class BTree {
  public:
-  Node **d_root_p_;
+  NodePtr *d_root_p_;
   DynamicAllocator<ALLOC_CAPACITY> allocator_;
 
  public:
   BTree() {
     CHKERR(cutil::DeviceAlloc(d_root_p_, 1));
-    allocate_root<<<1, 1>>>(d_root_p_);
+    allocate_root<<<1, 1>>>(d_root_p_, allocator_);
     CHKERR(cudaDeviceSynchronize());
   }
 };
