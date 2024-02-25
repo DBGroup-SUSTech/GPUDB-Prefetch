@@ -116,25 +116,25 @@ TEST(skew, amac) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  int els_per_thread = 4;
-  int threads_per_block = 512;
+  //   int els_per_thread = 4;
+  //   int threads_per_block = 512;
   classicjoin::amac::ConfigAMAC config;
-  {  // build kernel
-    const int els_per_block = threads_per_block * els_per_thread;
-    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-    config.build_gridsize = blocks_per_grid;
-    config.build_blocksize = threads_per_block;
-  }
+  //   {  // build kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+  //     config.build_gridsize = blocks_per_grid;
+  //     config.build_blocksize = threads_per_block;
+  //   }
   // {  // probe kernel
   //   const int els_per_block = threads_per_block * els_per_thread;
   //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
   //   config.probe_gridsize = blocks_per_grid;
   //   config.probe_blocksize = threads_per_block;
   // }
-  // config.build_blocksize = 256;
-  // config.build_gridsize = 100;
+  config.build_blocksize = 128;
+  config.build_gridsize = 72 * 2;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
@@ -197,9 +197,9 @@ TEST(skew, imv) {
   //   config.probe_blocksize = threads_per_block;
   // }
   config.build_blocksize = 128;
-  config.build_gridsize = 72;
+  config.build_gridsize = 72 * 2;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
@@ -445,25 +445,25 @@ TEST(unique, amac) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  int els_per_thread = 4;
-  int threads_per_block = 512;
+  //   int els_per_thread = 4;
+  //   int threads_per_block = 512;
   classicjoin::amac::ConfigAMAC config;
-  {  // build kernel
-    const int els_per_block = threads_per_block * els_per_thread;
-    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-    config.build_gridsize = blocks_per_grid;
-    config.build_blocksize = threads_per_block;
-  }
+  //   {  // build kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+  //     config.build_gridsize = blocks_per_grid;
+  //     config.build_blocksize = threads_per_block;
+  //   }
   //   {  // probe kernel
   //     const int els_per_block = threads_per_block * els_per_thread;
   //     const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
   //     config.probe_gridsize = blocks_per_grid;
   //     config.probe_blocksize = threads_per_block;
   //   }
-  // config.build_blocksize = 256;
-  // config.build_gridsize = 100;
+  config.build_blocksize = 128;
+  config.build_gridsize = 72 * 2;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
@@ -526,9 +526,9 @@ TEST(unique, imv) {
   //   config.probe_blocksize = threads_per_block;
   // }
   config.build_blocksize = 128;
-  config.build_gridsize = 72;
+  config.build_gridsize = 72 * 2;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"

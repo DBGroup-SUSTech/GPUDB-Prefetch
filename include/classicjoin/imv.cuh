@@ -53,8 +53,8 @@ struct fsm_shared_t {
 /// @param ht_slot      Headers of chains
 /// @param ht_size_log  ht size = ht_size_log << 1
 /// @return
-__global__ void build_ht(Tuple *r, Entry *entries, int r_n,
-                         EntryHeader *ht_slot, int ht_size_log) {
+__global__ void build_ht_prefetch(Tuple *r, Entry *entries, int r_n,
+                                  EntryHeader *ht_slot, int ht_size_log) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -424,12 +424,13 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   {
     CHKERR(
         cudaEventRecordWithFlags(start_build, stream, cudaEventRecordExternal));
-    const int smeme_size = PDIST * cfg.build_blocksize * sizeof(uint64_t);
-    build::build_ht<<<cfg.build_gridsize, cfg.build_blocksize, smeme_size,
-                      stream>>>(d_r, d_entries, r_n, d_ht_slot, ht_size_log);
-    // build::build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize,
-    // smeme_size,
-    //                   stream>>>(d_r, d_entries, r_n, d_ht_slot, ht_size_log);
+    // const int smeme_size = PDIST * cfg.build_blocksize * sizeof(uint64_t);
+    // build::build_ht_prefetch<<<cfg.build_gridsize, cfg.build_blocksize,
+    //                            smeme_size, stream>>>(d_r, d_entries, r_n,
+    //                                                  d_ht_slot, ht_size_log);
+    build::
+        build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
+            d_r, d_entries, r_n, d_ht_slot, ht_size_log);
     CHKERR(
         cudaEventRecordWithFlags(end_build, stream, cudaEventRecordExternal));
   }
