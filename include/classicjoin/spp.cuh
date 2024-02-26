@@ -42,10 +42,12 @@ constexpr int PDIST = 8;             // prefetch distance & group size
 constexpr int K = 2;                 // the number of code stage (0,1, ...K)
 constexpr int D = 4;                 // iteration distance
 constexpr int STATE_NUM = K * D + 1; // state number
-constexpr int PROBE_NUM = 512;
-constexpr int PADDING = 1;            // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 72; // threads per block
+// constexpr int PROBE_NUM = 512;
+constexpr int PADDING = 1;             // solve bank conflict
+constexpr int THREADS_PER_BLOCK = 128; // threads per block
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+#define LOOP_WORK_FLAG(pipline_state, match_stage_finish_flag)                 \
+  ((pipline_state != pipline_state_t::NORMAL || !(match_stage_finish_flag)))
 
 // TODO: fsm_shared
 // TODO: compare 3 methods
@@ -127,29 +129,27 @@ __launch_bounds__(128, 1) //
   int match_virtual_id = -2 * D;
 
   int rematch_virtual_s_tuple_id = -1;
-  int finish_num = 0;
+
+  bool match_stage_finish_flag = false;
 
   int aggr_local = 0;
 
   int idx = -1;
 
-  while (finish_num != PROBE_NUM) {
+  while (LOOP_WORK_FLAG(pipline_state, match_stage_finish_flag)) {
     // hash stage:
     idx = hash_virtual_id % STATE_NUM;
     if (pipline_state != pipline_state_t::INTERRUPTION) {
       ++hash_virtual_id;
-      if (hash_virtual_id <= PROBE_NUM) {
-        fsm[idx].state = state_t::HASH;
-        if (tid + stride * (hash_virtual_id - 1) < s_n) {
-          fsm[idx].s_tuple = s[tid + stride * (hash_virtual_id - 1)];
-          int hval = fsm[idx].s_tuple.k & ht_mask;
-          pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
-                              sizeof(void *));
-          fsm[idx].state = state_t::NEXT;
-        } else {
-          finish_num++;
-          fsm[idx].state = state_t::DONE;
-        }
+      fsm[idx].state = state_t::HASH;
+      if (tid + stride * (hash_virtual_id - 1) < s_n) {
+        fsm[idx].s_tuple = s[tid + stride * (hash_virtual_id - 1)];
+        int hval = fsm[idx].s_tuple.k & ht_mask;
+        pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
+                            sizeof(void *));
+        fsm[idx].state = state_t::NEXT;
+      } else {
+        fsm[idx].state = state_t::DONE;
       }
       pipline_state = pipline_state_t::NORMAL;
     }
@@ -163,7 +163,8 @@ __launch_bounds__(128, 1) //
     }
     if (pipline_state == pipline_state_t::INTERRUPTION ||
         (pipline_state == pipline_state_t::NORMAL &&
-         (next_virtual_id <= PROBE_NUM) && next_virtual_id >= 1)) {
+         (tid + stride * (next_virtual_id - 1) < s_n) &&
+         next_virtual_id >= 1)) {
       if (fsm[idx].state == state_t::NEXT) {
         pref_handler.wait(pipline_state);
         fsm[idx].next = reinterpret_cast<Entry *>(VSMEM(idx));
@@ -173,7 +174,6 @@ __launch_bounds__(128, 1) //
                               &(fsm[idx].next->tuple), sizeof(Tuple));
 
         } else {
-          ++finish_num;
           fsm[idx].state = state_t::DONE;
           if (pipline_state == pipline_state_t::INTERRUPTION) {
             pipline_state = pipline_state_t::RENORMAL;
@@ -192,7 +192,8 @@ __launch_bounds__(128, 1) //
       }
       if (pipline_state == pipline_state_t::INTERRUPTION ||
           (pipline_state == pipline_state_t::NORMAL &&
-           (match_virtual_id <= PROBE_NUM) && match_virtual_id >= 1)) {
+           (tid + stride * (match_virtual_id - 1) < s_n) &&
+           match_virtual_id >= 1)) {
         if (fsm[idx].state == state_t::MATCH) {
           pref_handler.wait(pipline_state);
           Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(idx));
@@ -208,6 +209,9 @@ __launch_bounds__(128, 1) //
           fsm[idx].state = state_t::NEXT;
         }
       }
+    }
+    if (tid + stride * (match_virtual_id - 1) >= s_n) {
+      match_stage_finish_flag = true;
     }
   }
   aggr_fn_global(aggr_local, o_aggr);
@@ -232,30 +236,27 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
   int match_virtual_id = -2 * D;
 
   int rematch_virtual_s_tuple_id = -1;
-  int finish_num = 0;
+
+  bool match_stage_finish_flag = false;
 
   int aggr_local = 0;
 
   int idx = -1;
 
-  while (finish_num != PROBE_NUM) {
+  while (LOOP_WORK_FLAG(pipline_state, match_stage_finish_flag)) {
     // hash stage:
     idx = hash_virtual_id % STATE_NUM;
     if (pipline_state != pipline_state_t::INTERRUPTION) {
       ++hash_virtual_id;
-      if (hash_virtual_id <= PROBE_NUM) {
-        fsm[idx].state[threadIdx.x] = state_t::HASH;
-        if (tid + stride * (hash_virtual_id - 1) < s_n) {
-          fsm[idx].s_tuple[threadIdx.x] =
-              s[tid + stride * (hash_virtual_id - 1)];
-          int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
-          pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
-                              sizeof(void *));
-          fsm[idx].state[threadIdx.x] = state_t::NEXT;
-        } else {
-          finish_num++;
-          fsm[idx].state[threadIdx.x] = state_t::DONE;
-        }
+      fsm[idx].state[threadIdx.x] = state_t::HASH;
+      if (tid + stride * (hash_virtual_id - 1) < s_n) {
+        fsm[idx].s_tuple[threadIdx.x] = s[tid + stride * (hash_virtual_id - 1)];
+        int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
+        pref_handler.commit(pipline_state, &VSMEM(idx), &ht_slot[hval],
+                            sizeof(void *));
+        fsm[idx].state[threadIdx.x] = state_t::NEXT;
+      } else {
+        fsm[idx].state[threadIdx.x] = state_t::DONE;
       }
       pipline_state = pipline_state_t::NORMAL;
     }
@@ -269,7 +270,8 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
     }
     if (pipline_state == pipline_state_t::INTERRUPTION ||
         (pipline_state == pipline_state_t::NORMAL &&
-         (next_virtual_id <= PROBE_NUM) && next_virtual_id >= 1)) {
+         (tid + stride * (next_virtual_id - 1) < s_n) &&
+         next_virtual_id >= 1)) {
       if (fsm[idx].state[threadIdx.x] == state_t::NEXT) {
         pref_handler.wait(pipline_state);
         fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(idx));
@@ -280,7 +282,6 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
                               sizeof(Tuple));
 
         } else {
-          ++finish_num;
           fsm[idx].state[threadIdx.x] = state_t::DONE;
           if (pipline_state == pipline_state_t::INTERRUPTION) {
             pipline_state = pipline_state_t::RENORMAL;
@@ -299,7 +300,8 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
       }
       if (pipline_state == pipline_state_t::INTERRUPTION ||
           (pipline_state == pipline_state_t::NORMAL &&
-           (match_virtual_id <= PROBE_NUM) && match_virtual_id >= 1)) {
+           (tid + stride * (match_virtual_id - 1) < s_n) &&
+           match_virtual_id >= 1)) {
         if (fsm[idx].state[threadIdx.x] == state_t::MATCH) {
           pref_handler.wait(pipline_state);
           Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(idx));
@@ -317,6 +319,9 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
           fsm[idx].state[threadIdx.x] = state_t::NEXT;
         }
       }
+    }
+    if (tid + stride * (match_virtual_id - 1) >= s_n) {
+      match_stage_finish_flag = true;
     }
   }
   aggr_fn_global(aggr_local, o_aggr);
