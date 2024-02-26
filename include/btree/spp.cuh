@@ -1,57 +1,84 @@
 #pragma once
 #include <assert.h>
+#include <cuda_pipeline_primitives.h>
 
 #include "btree/common.cuh"
 #include "btree/insert.cuh"
 
 /// @note
-/// B-Tree, fanout = 16, leaf node size = 16
-/// int32_t keys, int32_t values
-/// insert with OLC
-/// search with
 
 namespace btree {
-namespace naive {
-constexpr int LANES_PER_WARP = 8;  // or 8
+namespace spp {
 
-__device__ __forceinline__ void get(
-    int32_t key, int32_t &value, const NodePtr root_ptr,
-    DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
-  NodePtr node_ptr = root_ptr;
-  const Node *node = node_ptr.to_ptr<Node>(node_allocator);
-  while (node->type == Node::Type::INNER) {
-    // printf("node == inner\n");
-    const InnerNode *inner = static_cast<const InnerNode *>(node);
-    node_ptr = inner->children[inner->lower_bound(key)];
-    node = node_ptr.to_ptr<Node>(node_allocator);
-  }
-  const LeafNode *leaf = static_cast<const LeafNode *>(node);
-  int pos = leaf->lower_bound(key);
-  // printf("key = %d, leaf = %d\n", key, leaf->keys[pos]);
-  if (pos < leaf->n_key && key == leaf->keys[pos]) {
-    value = leaf->values[pos];
-  } else {
-    value = -1;
-  }
-  return;
-}
+constexpr int STAGE = 32;  // Max stages
+constexpr int ELS_PER_THREAD = 8;
+constexpr int THREADS_PER_BLOCK = 8;
+#define VSMEM2(v, index) v[(index) * blockDim.x + threadIdx.x]
+#define POS(i) (tid + (i) * stride)
+
+__shared__ InnerNode v[ELS_PER_THREAD * THREADS_PER_BLOCK];  // prefetch buffer
+__shared__ bool f[ELS_PER_THREAD *
+                  THREADS_PER_BLOCK];  // probe completed (true) or not (false)
+__shared__ int32_t key[ELS_PER_THREAD * THREADS_PER_BLOCK];
 
 __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
                               const NodePtr *root_p,
                               DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
-  // int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int warpid = threadIdx.x / 32;
-  int warplane = threadIdx.x % 32;
-  if (warplane >= LANES_PER_WARP) return;
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n) return;
+  int stride = blockDim.x * gridDim.x;
+  int G = (n - 1 - tid) / stride + 1;
 
-  int lid = warpid * LANES_PER_WARP + warplane;  // lane id
-  int lanes_per_block = blockDim.x / 32 * LANES_PER_WARP;
-  int stride = lanes_per_block * gridDim.x;
+  assert(G <= ELS_PER_THREAD);
+  assert(blockDim.x == THREADS_PER_BLOCK);
+  static_assert(sizeof(InnerNode) == sizeof(LeafNode));
 
-  for (int i = lanes_per_block * blockIdx.x + lid; i < n; i += stride) {
-    get(keys[i], values[i], *root_p, node_allocator);
+  prefetch_node_t pref{};
+
+  for (int k = 0; k < G; k++) {
+    VSMEM2(key, k) = keys[POS(k)];
+  }
+
+  pref.commit(&VSMEM2(v, 0), (*root_p).to_ptr<InnerNode>(node_allocator));
+  pref.wait();
+
+  for (int i = 0; i < G; i++) {
+    VSMEM2(f, i) = false;
+    if (i) VSMEM2(v, i) = VSMEM2(v, 0);
+  }
+  // iteration 1: code 0 for i = 0
+  // iteration 2: code 0 for i = 1, code 1 for i = 0
+  // ...
+  int finished = 0;
+  for (int i = 0; i < G + STAGE; i++) {
+    if (finished == G) break;
+    for (int j = i >= G ? G - 1 : i; j >= 0; j--) {
+      if (VSMEM2(f, j)) break;
+      if (!(i < G && j == i)) pref.wait();
+      auto node = static_cast<const Node *>(&VSMEM2(v, j));
+      if (node->type == Node::Type::INNER) {
+        auto inner = static_cast<const InnerNode *>(node);
+        int pos = inner->lower_bound(VSMEM2(key, j));
+        pref.commit(&VSMEM2(v, j),
+                    inner->children[pos].to_ptr<InnerNode>(node_allocator));
+      } else {
+        auto leaf = static_cast<const LeafNode *>(node);
+        auto &value = values[POS(j)];
+        int pos = leaf->lower_bound(VSMEM2(key, j));
+        if (pos < leaf->n_key && VSMEM2(key, j) == leaf->keys[pos]) {
+          value = leaf->values[pos];
+        } else {
+          value = -1;
+        }
+        finished++;
+        VSMEM2(f, j) = true;
+      }
+    }
   }
 }
+
+#undef VSMEM2
+#undef POS
 
 void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
@@ -109,8 +136,8 @@ void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaStreamEndCapture(stream, &graph));
   CHKERR(cudaGraphInstantiate(&instance, graph));
   CHKERR(cudaGraphLaunch(instance, stream));
-
   CHKERR(cudaStreamSynchronize(stream));
+
   float ms_build, ms_probe;
   CHKERR(cudaEventElapsedTime(&ms_build, start_build, end_build));
   CHKERR(cudaEventElapsedTime(&ms_probe, start_probe, end_probe));
@@ -129,5 +156,5 @@ void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   }
   delete[] outs;
 }
-}  // namespace naive
+}  // namespace spp
 }  // namespace btree

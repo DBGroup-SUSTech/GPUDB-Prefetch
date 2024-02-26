@@ -10,7 +10,25 @@ struct ConfigAMAC : public Config {
   int method = 4;  // three prefetch methods
 };
 
-// TODO: use prefetch in build_ht
+// for prefetch  ---------------------------------------------------------
+constexpr int PDIST = 8;                // prefetch distance & group size
+constexpr int THREADS_PER_BLOCK = 128;  // warps per thread
+#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+
+namespace build {
+
+enum class state_t : int {
+  HASH = 0,
+  INSERT = 1,
+  DONE = 4,
+};
+
+struct fsm_shared_t {
+  Tuple r_tuple[THREADS_PER_BLOCK];
+  Entry *entry[THREADS_PER_BLOCK];
+  state_t state[THREADS_PER_BLOCK];
+};
+
 /// @brief
 /// @param r            R relation
 /// @param entries      Pre-allocated hash table entries
@@ -18,8 +36,8 @@ struct ConfigAMAC : public Config {
 /// @param ht_slot      Headers of chains
 /// @param ht_size_log  ht size = ht_size_log << 1
 /// @return
-__global__ void build_ht(Tuple *r, Entry *entries, int r_n,
-                         EntryHeader *ht_slot, int ht_size_log) {
+__global__ void build_ht_naive(Tuple *r, Entry *entries, int r_n,
+                               EntryHeader *ht_slot, int ht_size_log) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
   int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -37,11 +55,66 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
   }
 }
 
-// for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;                // prefetch distance & group size
-constexpr int PADDING = 1;              // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 128;  // warps per thread
-#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+__global__ void build_ht_prefetch(Tuple *r, Entry *entries, int r_n,
+                                  EntryHeader *ht_slot, int ht_size_log) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  assert(blockDim.x == THREADS_PER_BLOCK);
+
+  __shared__ fsm_shared_t fsm[PDIST];
+  for (int k = 0; k < PDIST; ++k) {
+    fsm[k].state[threadIdx.x] = state_t::HASH;
+  }
+
+  extern __shared__ uint64_t v[];
+
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+    switch (fsm[k].state[threadIdx.x]) {
+      case state_t::HASH: {
+        if (i < r_n) {
+          fsm[k].r_tuple[threadIdx.x] = r[i];
+          fsm[k].entry[threadIdx.x] = &entries[i];
+          i += stride;
+          int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
+          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+          fsm[k].state[threadIdx.x] = state_t::INSERT;
+        } else {
+          fsm[k].state[threadIdx.x] = state_t::DONE;
+          ++all_done;
+        }
+        break;
+      }
+
+      case state_t::INSERT: {
+        pref.wait();
+        auto entry = fsm[k].entry[threadIdx.x];
+        int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
+        auto last = gutil::atomic_exch_64(&ht_slot[hval].next, entry);
+        entry->tuple = fsm[k].r_tuple[threadIdx.x];
+        entry->header.next = last;
+        fsm[k].state[threadIdx.x] = build::state_t::HASH;
+        --k;  // TODO
+        break;
+      }
+
+      default:
+        break;
+    }
+    ++k;
+  }
+}
+
+}  // namespace build
+
+namespace probe {
 
 // TODO: fsm_shared
 // TODO: compare 3 methods
@@ -315,6 +388,8 @@ __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
+}  // namespace probe
+
 // __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
 //   for (int i = 0; i < n; ++i) {
 //     printf("%d: %p\n", i, ht_slot[i].next);
@@ -379,8 +454,14 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   {
     CHKERR(
         cudaEventRecordWithFlags(start_build, stream, cudaEventRecordExternal));
-    build_ht<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
+    build::build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
         d_r, d_entries, r_n, d_ht_slot, ht_size_log);
+    // const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
+    // build::build_ht_prefetch<<<cfg.build_gridsize, cfg.build_blocksize,
+    // smeme_size,
+    //                     stream>>>(d_r, d_entries, r_n, d_ht_slot,
+    //                     ht_size_log);
+
     CHKERR(
         cudaEventRecordWithFlags(end_build, stream, cudaEventRecordExternal));
   }
@@ -393,18 +474,19 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
     if (cfg.method == 1) {
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
-      probe_ht_1<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                   stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+      probe::probe_ht_1<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
+                          stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else if (cfg.method == 3) {
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
-      probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                   stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+      probe::probe_ht_3<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
+                          stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else if (cfg.method == 4) {
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
-      probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
-                        stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+      probe::probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize,
+                               smeme_size, stream>>>(d_s, s_n, d_ht_slot,
+                                                     ht_size_log, d_aggr);
     } else {
       assert(0);
     }
