@@ -10,69 +10,67 @@
 namespace btree {
 namespace spp {
 
-constexpr int STAGE = 32; // Max stages
+constexpr int STAGE = 32;  // Max stages
 constexpr int ELS_PER_THREAD = 8;
 constexpr int THREADS_PER_BLOCK = 8;
 #define VSMEM2(v, index) v[(index) * blockDim.x + threadIdx.x]
 #define POS(i) (tid + (i) * stride)
 
 __shared__ InnerNode v[ELS_PER_THREAD * THREADS_PER_BLOCK];  // prefetch buffer
-__shared__ bool f[ELS_PER_THREAD * THREADS_PER_BLOCK]; // probe completed (true) or not (false)
-__shared__ int64_t key[ELS_PER_THREAD * THREADS_PER_BLOCK];
+__shared__ bool f[ELS_PER_THREAD *
+                  THREADS_PER_BLOCK];  // probe completed (true) or not (false)
+__shared__ int32_t key[ELS_PER_THREAD * THREADS_PER_BLOCK];
 
-__global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
-                              const Node *const *root_p) {
+__global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
+                              const NodePtr *root_p,
+                              DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if(tid >= n)
-    return ;
+  if (tid >= n) return;
   int stride = blockDim.x * gridDim.x;
-  int G = (n-1-tid) / stride + 1;
+  int G = (n - 1 - tid) / stride + 1;
 
   assert(G <= ELS_PER_THREAD);
   assert(blockDim.x == THREADS_PER_BLOCK);
   static_assert(sizeof(InnerNode) == sizeof(LeafNode));
 
   prefetch_node_t pref{};
-  
-  for (int k = 0; k < G; k ++) {
+
+  for (int k = 0; k < G; k++) {
     VSMEM2(key, k) = keys[POS(k)];
   }
-  
-  pref.commit(&VSMEM2(v, 0), *root_p);
+
+  pref.commit(&VSMEM2(v, 0), (*root_p).to_ptr<InnerNode>(node_allocator));
   pref.wait();
 
-  for (int i = 0; i < G; i ++) {
+  for (int i = 0; i < G; i++) {
     VSMEM2(f, i) = false;
-    if (i)
-      VSMEM2(v, i) = VSMEM2(v, 0);
+    if (i) VSMEM2(v, i) = VSMEM2(v, 0);
   }
   // iteration 1: code 0 for i = 0
   // iteration 2: code 0 for i = 1, code 1 for i = 0
   // ...
   int finished = 0;
-  for (int i = 0; i < G + STAGE; i ++) {
-    if (finished == G)
-      break ;
-    for (int j = i >= G ? G - 1 : i; j >= 0; j --) {
-      if ( VSMEM2(f, j) )
-        break ;
-      if (!(i < G && j == i))
-        pref.wait();
-      auto node = static_cast<const Node *> (&VSMEM2(v, j));
+  for (int i = 0; i < G + STAGE; i++) {
+    if (finished == G) break;
+    for (int j = i >= G ? G - 1 : i; j >= 0; j--) {
+      if (VSMEM2(f, j)) break;
+      if (!(i < G && j == i)) pref.wait();
+      auto node = static_cast<const Node *>(&VSMEM2(v, j));
       if (node->type == Node::Type::INNER) {
         auto inner = static_cast<const InnerNode *>(node);
-        int pos = inner->lower_bound(VSMEM2(key,j));
-        pref.commit(&VSMEM2(v, j), inner->children[pos]);
+        int pos = inner->lower_bound(VSMEM2(key, j));
+        pref.commit(&VSMEM2(v, j),
+                    inner->children[pos].to_ptr<InnerNode>(node_allocator));
       } else {
         auto leaf = static_cast<const LeafNode *>(node);
         auto &value = values[POS(j)];
-        int pos = leaf->lower_bound(VSMEM2(key,j));
-        if (pos < leaf->n_key && VSMEM2(key,j) == leaf->keys[pos]) {
+        int pos = leaf->lower_bound(VSMEM2(key, j));
+        if (pos < leaf->n_key && VSMEM2(key, j) == leaf->keys[pos]) {
           value = leaf->values[pos];
         } else {
           value = -1;
         }
-        finished ++;
+        finished++;
         VSMEM2(f, j) = true;
       }
     }
@@ -82,19 +80,19 @@ __global__ void gets_parallel(int64_t *keys, int n, int64_t *values,
 #undef VSMEM2
 #undef POS
 
-void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
+void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
-  
+
   // input
-  int64_t *d_keys = nullptr, *d_values = nullptr;
+  int32_t *d_keys = nullptr, *d_values = nullptr;
   CHKERR(cutil::DeviceAlloc(d_keys, n));
   CHKERR(cutil::DeviceAlloc(d_values, n));
   CHKERR(cutil::CpyHostToDevice(d_keys, keys, n));
   CHKERR(cutil::CpyHostToDevice(d_values, values, n));
 
   // output
-  int64_t *d_outs = nullptr;
+  int32_t *d_outs = nullptr;
   CHKERR(cutil::DeviceAlloc(d_outs, n));
   CHKERR(cutil::DeviceSet(d_outs, 0, n));
 
@@ -130,7 +128,7 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
     CHKERR(
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
     gets_parallel<<<cfg.probe_gridsize, cfg.probe_blocksize, 0, stream>>>(
-        d_keys, n, d_outs, tree.d_root_p_);
+        d_keys, n, d_outs, tree.d_root_p_, tree.allocator_);
     CHKERR(
         cudaEventRecordWithFlags(end_probe, stream, cudaEventRecordExternal));
   }
@@ -151,12 +149,12 @@ void index(int64_t *keys, int64_t *values, int32_t n, Config cfg) {
       ms_build, n * 1.0 / ms_build * 1000, ms_probe, n * 1.0 / ms_probe * 1000);
 
   // check output
-  int64_t *outs = new int64_t[n];
+  int32_t *outs = new int32_t[n];
   CHKERR(cutil::CpyDeviceToHost(outs, d_outs, n));
   for (int i = 0; i < n; ++i) {
     assert(outs[i] == values[i]);
   }
   delete[] outs;
 }
-}  // namespace naive
+}  // namespace spp
 }  // namespace btree
