@@ -10,69 +10,84 @@
 namespace btree {
 namespace gp {
 
-constexpr int G_MAX = 8;
-constexpr int THREADS_PER_BLOCK = 8;
-#define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+constexpr int PDIST = 8;
+constexpr int LANES_PER_BLOCK = 32;
+constexpr int LANES_PER_WARP = 8;
 
-__shared__ InnerNode v[G_MAX * THREADS_PER_BLOCK];  // prefetch buffer
+// constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
+
+
+#define VSMEM(v, index) v[(index) * LANES_PER_BLOCK + lid]
+
+__shared__ InnerNode v[PDIST * LANES_PER_BLOCK];  // prefetch buffer
+__shared__ int32_t key[PDIST * LANES_PER_BLOCK];
 
 __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
                               const NodePtr *root_p, DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if(tid >= n)
+  
+  int warpId = threadIdx.x / 32;
+  int warpLane = threadIdx.x % 32;
+  if (warpLane >= LANES_PER_WARP)
     return ;
-  int stride = blockDim.x * gridDim.x;
+  
+  int lid = warpId * LANES_PER_WARP + warpLane;  // lane id in the block
+  int tid = blockIdx.x * LANES_PER_BLOCK + lid; // the thread id
+  if (tid >= n)
+    return ;
 
-  assert(blockDim.x == THREADS_PER_BLOCK);
+  int stride = gridDim.x * LANES_PER_BLOCK;
+
   static_assert(sizeof(InnerNode) == sizeof(LeafNode));
+  static_assert(LANES_PER_BLOCK % LANES_PER_WARP == 0);
 
   prefetch_node_t pref{};
-  int G = (n-1-tid) / stride + 1;
-  assert(G <= G_MAX);
+  for (int st = tid; st < n; st += stride * PDIST) { // group start position
+    pref.commit(&VSMEM(v, 0), (*root_p).to_ptr<InnerNode>(node_allocator));
+    pref.wait();
+    
+    int G = min( (n - 1 - st) / stride + 1, PDIST );
 
-  pref.commit(&VSMEM(0), (*root_p).to_ptr<InnerNode>(node_allocator));
-  pref.wait();
-  int32_t key[G_MAX];
-  for (int k = 0; k < G; k ++) {
-    if(k)
-      VSMEM(k) = VSMEM(0);
-    key[k] = keys[tid + k * stride];
-  }
-
-  for (int round = 0; ; round ++) {
-    bool flag = false;
-    for (int k = 0, i = tid; k < G; k ++, i += stride) {
-
-      if (round)
-        pref.wait();
-
-      auto node = static_cast<const Node *> (&VSMEM(k));
-      if (node->type == Node::Type::INNER) {
-        auto inner = static_cast<const InnerNode *>(node);
-        int pos = inner->lower_bound(key[k]);
-        pref.commit(&VSMEM(k), inner->children[pos].to_ptr<InnerNode>(node_allocator));
-      } else {
-        flag = true;
-        auto leaf = static_cast<const LeafNode *>(node);
-        auto &value = values[i];
-
-        int pos = leaf->lower_bound(key[k]);
-        if (pos < leaf->n_key && key[k] == leaf->keys[pos]) {
-          value = leaf->values[pos];
-        } else {
-          value = -1;
-        }
-      } 
+    for (int k = 0; k < G; k ++) {
+      if(k)
+        VSMEM(v, k) = VSMEM(v, 0);
+      VSMEM(key, k) = keys[st + k * stride];
     }
-    if(flag)
-      break;
+
+    for (bool notFirst = false; ; notFirst = true) {
+      bool endFlag = false;
+      for (int k = 0, i = st; k < G; k ++, i += stride) {
+        if (notFirst)
+          pref.wait();
+
+        auto node = static_cast<const Node *> (&VSMEM(v, k));
+        if (node->type == Node::Type::INNER) {
+          auto inner = static_cast<const InnerNode *>(node);
+          int pos = inner->lower_bound(VSMEM(key, k));
+          pref.commit(&VSMEM(v, k), inner->children[pos].to_ptr<InnerNode>(node_allocator));
+        } else {
+          endFlag = true;
+          auto leaf = static_cast<const LeafNode *>(node);
+          auto &value = values[i];
+
+          int pos = leaf->lower_bound(VSMEM(key, k));
+          if (pos < leaf->n_key && VSMEM(key, k) == leaf->keys[pos]) {
+            value = leaf->values[pos];
+          } else {
+            value = -1;
+          }
+        } 
+      }
+      if (endFlag)
+        break;
+    }
   }
-  
 }
 
 void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
+
+  printf("size: %d\n", sizeof(int));
 
   // input
   int32_t *d_keys = nullptr, *d_values = nullptr;
