@@ -393,7 +393,6 @@ __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-
 __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
   for (int i = 0; i < n; ++i) {
     printf("%d: %p\n", i, ht_slot[i].next);
