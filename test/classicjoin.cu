@@ -251,7 +251,7 @@ TEST(skew, gp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 64;
-  int threads_per_block = 72;
+  int threads_per_block = 128;
   classicjoin::gp::ConfigGP config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -578,7 +578,7 @@ TEST(unique, gp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 16;
-  int threads_per_block = 72;
+  int threads_per_block = 128;
   classicjoin::gp::ConfigGP config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -643,7 +643,7 @@ TEST(unique, DISABLED_spp) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 512;
-  int threads_per_block = 72;
+  int threads_per_block = 128;
   classicjoin::spp::ConfigSPP config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -660,6 +660,9 @@ TEST(unique, DISABLED_spp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
+<<<<<<< HEAD
+  config.probe_gridsize = 72;
+=======
   config.probe_gridsize = 128;
 
   fmt::print(
@@ -729,6 +732,7 @@ TEST(skew_r_unique_s, naive) {
   //   config.build_gridsize = gridsize;
   //   config.probe_blocksize = blocksize;
   //   config.probe_gridsize = gridsize;
+>>>>>>> master
 
   fmt::print(
       "Query:\n"
