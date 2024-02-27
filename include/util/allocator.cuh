@@ -1,7 +1,35 @@
 #include "util/util.cuh"
 
-#define ALLOC_CAPACITY ((uint64_t(1) << 33))  // 8GB for node
+#define ALLOC_CAPACITY ((uint64_t(1) << 34))  // 16GB for node
 
+template <typename T, uint64_t CAPACITY>
+class ObjAllocator {
+  static_assert(sizeof(T) % 4 == 0);
+
+ public:
+  ObjAllocator() {
+    CHKERR(cutil::DeviceAlloc(d_pool_, CAPACITY));
+    CHKERR(cutil::DeviceSet(d_pool_, 0x00, CAPACITY));
+    CHKERR(cutil::DeviceAlloc(d_count_, 1));
+    CHKERR(cutil::DeviceSet(d_count_, 0x00, 1));
+  };
+
+  ObjAllocator &operator=(const ObjAllocator &rhs) {
+    d_pool_ = rhs.d_pool_;
+    d_count_ = rhs.d_count_;
+    return *this;
+  }
+
+  __device__ __forceinline__ T *malloc() {
+    // assert(*d_count_ < CAPACITY);
+    uint32_t old_count = atomicAdd(d_count_, 1);
+    assert(old_count < CAPACITY);
+    return d_pool_ + old_count;
+  }
+
+  T *d_pool_;
+  uint32_t *d_count_;
+};
 // capacity aligned to 4 bytes
 template <uint64_t CAPACITY>
 class DynamicAllocator {

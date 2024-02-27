@@ -160,7 +160,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cutil::DeviceAlloc(d_ht_slot, ht_size));
   CHKERR(cutil::DeviceAlloc(d_entries, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
-  CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
+  CHKERR(cutil::DeviceSet(d_entries, 0, ht_size));
 
   int32_t *d_aggr;
   CHKERR(cutil::DeviceAlloc(d_aggr, 1));
