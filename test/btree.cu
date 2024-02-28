@@ -25,7 +25,7 @@ TEST(unique, naive) {
   fmt::print("Creating {} unique values ({} MB)\n", n,
              n * sizeof(int32_t) / 1024 / 1024);
 
-  int els_per_thread = 8;  // 8/32 per warp is the best
+  int els_per_thread = 8;
   int threads_per_block = 512;
   btree::Config config;
 
@@ -37,11 +37,11 @@ TEST(unique, naive) {
   }
 
   {
-    // const int els_per_block = (threads_per_block / 32) *
-    //                           btree::naive::LANES_PER_WARP * els_per_thread;
-    // const int blocks_per_grid = (n + els_per_block - 1) / els_per_block;
-    config.probe_gridsize = args::get<int>("GS");
-    config.probe_blocksize = args::get<int>("BS");
+    const int els_per_block = (threads_per_block / 32) *
+                              btree::naive::LANES_PER_WARP * els_per_thread;
+    const int blocks_per_grid = (n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
   }
   btree::naive::index(keys, values, n, config);
   fmt::print("Insert and Lookup {} tuples into BTree\n", n);
