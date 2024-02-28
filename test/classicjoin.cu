@@ -1,4 +1,5 @@
 #include <fmt/format.h>
+#include <fmt/core.h>
 #include <gtest/gtest.h>
 
 #include "classicjoin/amac.cuh"
@@ -383,7 +384,7 @@ TEST(unique, naive) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 4;
-  int threads_per_block = 512;
+  int threads_per_block = 256;
   classicjoin::Config config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -479,16 +480,17 @@ TEST(measure, naive) {
 TEST(unique, amac) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
+  //   double skew = args::get<double>("SKEW");
   assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
+                                              r_key, r_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -496,11 +498,11 @@ TEST(unique, amac) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
-  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
-  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
+//   fmt::print("R: {}\n", cutil::fmt_arr(r_key, r_n));
+//   fmt::print("S: {}\n", cutil::fmt_arr(s_key, s_n));
 
   int32_t *r_payload = new int32_t[r_n];
   int32_t *s_payload = new int32_t[s_n];
@@ -509,8 +511,8 @@ TEST(unique, amac) {
   std::copy_n(r_key, r_n, r_payload);
   std::copy_n(s_key, s_n, s_payload);
 
-  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+//   fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+//   fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   //   int els_per_thread = 4;
   //   int threads_per_block = 512;
