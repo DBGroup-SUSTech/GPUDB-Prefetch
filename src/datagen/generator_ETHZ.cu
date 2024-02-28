@@ -353,7 +353,7 @@ void gen_zipf(uint64_t stream_size, unsigned int alphabet_size,
   // 	seeds[i] = rand();
 
   for (uint64_t i = 0; i < stream_size; i++) {
-    if (i % 1000000 == 0) printf("live %lu\n", i / 1000000);
+    // if (i % 1000000 == 0) printf("live %lu\n", i / 1000000);
 
     /* take random number */
     double r;
