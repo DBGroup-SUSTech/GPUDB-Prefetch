@@ -40,7 +40,7 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
 // for prefetch  ---------------------------------------------------------
 constexpr int PDIST = 8;              // prefetch distance & group size
 constexpr int PADDING = 1;            // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 72; // threads per block
+constexpr int THREADS_PER_BLOCK = 128; // threads per block
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
 
 // TODO: fsm_shared
@@ -175,7 +175,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cutil::DeviceAlloc(d_ht_slot, ht_size));
   CHKERR(cutil::DeviceAlloc(d_entries, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
-  CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
+  CHKERR(cutil::DeviceSet(d_entries, 0, ht_size));
 
   int32_t *d_aggr;
   CHKERR(cutil::DeviceAlloc(d_aggr, 1));
