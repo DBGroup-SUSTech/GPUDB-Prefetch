@@ -284,6 +284,7 @@ __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
         //   assert(same_mask == MASK_ALL_LANES);
         // };
 
+        // TODO: optimize with shfl_sync
         if (active_cnt + rvs_cnt < 32) {  // empty
           int prefix_cnt = __popc(active_mask & prefixlanes);
           if (active) {
@@ -428,7 +429,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cutil::DeviceAlloc(d_ht_slot, ht_size));
   CHKERR(cutil::DeviceAlloc(d_entries, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
-  CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
+  CHKERR(cutil::DeviceSet(d_entries, 0, ht_size));
 
   int32_t *d_aggr;
   CHKERR(cutil::DeviceAlloc(d_aggr, 1));
