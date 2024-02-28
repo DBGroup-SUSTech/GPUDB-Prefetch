@@ -1,6 +1,6 @@
 #pragma once
 
-#include "classicjoin/common.cuh"
+#include "common.cuh"
 #include "util/util.cuh"
 
 namespace classicjoin {
@@ -148,9 +148,9 @@ struct fsm_shared_t {
 /// @param ht_size_log log2(htsize)
 /// @param entries     hash table entries
 /// @return
-__launch_bounds__(128, 1)  //
-    __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
-                               int ht_size_log, int *o_aggr) {
+// __launch_bounds__(128, 1)  //
+__global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
+                           int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
@@ -300,8 +300,36 @@ __launch_bounds__(128, 1)  //
   aggr_fn_global(aggr_local, o_aggr);
 }
 
+// merge next phase and match phase
 __global__ void probe_ht_2(Tuple *s, int s_n, EntryHeader *ht_slot,
-                           int ht_size_log, int *o_aggr);
+                           int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  extern __shared__ uint64_t v[];
+  __shared__ fsm_shared_t fsm[PDIST];
+  for (int k = 0; k < PDIST; ++k) fsm[k].state[threadIdx.x] = state_t::HASH;
+
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+  int aggr_local = 0;
+
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+    switch (fsm[k].state[threadIdx.x]) {
+      case state_t::HASH: {
+        fsm[k].state[threadIdx.x] = state_t::NEXT;
+        fsm[k].s_tuple[threadIdx.x] = s[i];
+        i += stride;
+        int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+      }
+    }
+  }
+}
 
 __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
                            int ht_size_log, int *o_aggr) {

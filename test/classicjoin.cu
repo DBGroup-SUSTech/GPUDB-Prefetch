@@ -725,9 +725,6 @@ TEST(unique, DISABLED_spp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
-<<<<<<< HEAD
-  config.probe_gridsize = 72;
-=======
   config.probe_gridsize = 128;
 
   fmt::print(
@@ -797,7 +794,6 @@ TEST(skew_r_unique_s, naive) {
   //   config.build_gridsize = gridsize;
   //   config.probe_blocksize = blocksize;
   //   config.probe_gridsize = gridsize;
->>>>>>> master
 
   fmt::print(
       "Query:\n"
