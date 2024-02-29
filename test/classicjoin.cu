@@ -1,5 +1,5 @@
-#include <fmt/format.h>
 #include <fmt/core.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "classicjoin/amac.cuh"
@@ -48,27 +48,27 @@ TEST(skew, naive) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  // int els_per_thread = 4;
-  // int threads_per_block = 512;
+  int els_per_thread = 4;
+  int threads_per_block = 256;
   classicjoin::Config config;
-  // { // build kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-  //   config.build_gridsize = blocks_per_grid;
-  //   config.build_blocksize = threads_per_block;
-  // }
-  // { // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  const int blocksize = args::get<int>("BSIZE");
-  const int gridsize = args::get<int>("GSIZE");
-  config.build_blocksize = blocksize;
-  config.build_gridsize = gridsize;
-  config.probe_blocksize = blocksize;
-  config.probe_gridsize = gridsize;
+  {  // build kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+    config.build_gridsize = blocks_per_grid;
+    config.build_blocksize = threads_per_block;
+  }
+  {  // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
+  //   const int blocksize = args::get<int>("BSIZE");
+  //   const int gridsize = args::get<int>("GSIZE");
+  //   config.build_blocksize = blocksize;
+  //   config.build_gridsize = gridsize;
+  //   config.probe_blocksize = blocksize;
+  //   config.probe_gridsize = gridsize;
 
   fmt::print(
       "Query:\n"
@@ -501,8 +501,8 @@ TEST(unique, amac) {
       "using unique keys\n",
       s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
-//   fmt::print("R: {}\n", cutil::fmt_arr(r_key, r_n));
-//   fmt::print("S: {}\n", cutil::fmt_arr(s_key, s_n));
+  //   fmt::print("R: {}\n", cutil::fmt_arr(r_key, r_n));
+  //   fmt::print("S: {}\n", cutil::fmt_arr(s_key, s_n));
 
   int32_t *r_payload = new int32_t[r_n];
   int32_t *s_payload = new int32_t[s_n];
@@ -511,8 +511,8 @@ TEST(unique, amac) {
   std::copy_n(r_key, r_n, r_payload);
   std::copy_n(s_key, s_n, s_payload);
 
-//   fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-//   fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+  //   fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+  //   fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   //   int els_per_thread = 4;
   //   int threads_per_block = 512;
@@ -776,7 +776,7 @@ TEST(skew_r_unique_s, naive) {
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
   int els_per_thread = 4;
-  int threads_per_block = 512;
+  int threads_per_block = 256;
   classicjoin::Config config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -846,22 +846,22 @@ TEST(skew_r_unique_s, imv) {
   const int threads_per_block = 128;
   const int els_per_thread = 1024;
   classicjoin::imv::ConfigIMV config;
-  //   {  // build kernel
-  //     const int els_per_block = threads_per_block * els_per_thread;
-  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-  //     config.build_gridsize = blocks_per_grid;
-  //     config.build_blocksize = threads_per_block;
-  //   }
+  {  // build kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+    config.build_gridsize = blocks_per_grid;
+    config.build_blocksize = threads_per_block;
+  }
   {  // probe kernel
     const int els_per_block = threads_per_block * els_per_thread;
     const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
     config.probe_gridsize = blocks_per_grid;
     config.probe_blocksize = threads_per_block;
   }
-  config.build_blocksize = 128;
-  config.build_gridsize = 72 * 2;
+  //   config.build_blocksize = 128;
+  //   config.build_gridsize = 72 * 2;
   //   config.probe_blocksize = 128;
-  //   config.probe_gridsize = 72 * 4;
+  //   config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
