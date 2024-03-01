@@ -7,7 +7,7 @@ namespace classicjoin {
 namespace spp {
 
 struct ConfigSPP : public Config {
-  int method = 2; // one prefetch methods
+  int method = 3; // one prefetch methods
 };
 
 // TODO: use prefetch in build_ht
@@ -46,6 +46,8 @@ constexpr int STATE_NUM = K * D + 1; // state number
 constexpr int PADDING = 1;             // solve bank conflict
 constexpr int THREADS_PER_BLOCK = 128; // threads per block
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
+#define VSMEM_2(index, offset)                                                 \
+  v[2 * (index * blockDim.x + threadIdx.x) + offset]
 #define LOOP_WORK_FLAG(pipline_state, match_stage_finish_flag)                 \
   ((pipline_state != pipline_state_t::NORMAL || !(match_stage_finish_flag)))
 
@@ -327,6 +329,102 @@ __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
+__device__ __forceinline__ void handle_interruption(Entry *next,
+                                                    const int &s_tuple_k,
+                                                    const int &s_tuple_v,
+                                                    int &aggr_local) {
+  while (next) {
+    Tuple r_tuple = next->tuple;
+    if (r_tuple.k == s_tuple_k) {
+      aggr_local += r_tuple.v * s_tuple_v;
+    }
+    next = next->header.next;
+  }
+}
+
+__global__ void probe_ht_2_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
+                                int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+
+  extern __shared__ uint64_t v[]; // prefetch buffer
+  __shared__ fsm_shared_t fsm[STATE_NUM];
+
+  prefetch_t pref{};
+
+  int hash_virtual_id = 0;
+  int next_virtual_id = -D;
+  int match_virtual_id = -2 * D;
+
+  bool match_stage_finish_flag = false;
+
+  int aggr_local = 0;
+
+  int idx = -1;
+
+  while (!match_stage_finish_flag) {
+    // hash stage:
+    idx = hash_virtual_id % STATE_NUM;
+    ++hash_virtual_id;
+    fsm[idx].state[threadIdx.x] = state_t::HASH;
+    if (tid + stride * (hash_virtual_id - 1) < s_n) {
+      fsm[idx].s_tuple[threadIdx.x] = s[tid + stride * (hash_virtual_id - 1)];
+      int hval = fsm[idx].s_tuple[threadIdx.x].k & ht_mask;
+      pref.commit(&VSMEM_2(idx, 1), &ht_slot[hval], 8);
+      fsm[idx].state[threadIdx.x] = state_t::NEXT;
+    } else {
+      fsm[idx].state[threadIdx.x] = state_t::DONE;
+    }
+
+    // next stage
+    idx = next_virtual_id % STATE_NUM;
+    ++next_virtual_id;
+    if ((tid + stride * (next_virtual_id - 1) < s_n) && next_virtual_id >= 1) {
+      if (fsm[idx].state[threadIdx.x] == state_t::NEXT) {
+        pref.wait();
+        fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM_2(idx, 1));
+        if (fsm[idx].next[threadIdx.x]) {
+          fsm[idx].state[threadIdx.x] = state_t::MATCH;
+          pref.commit(&VSMEM_2(idx, 0), &(fsm[idx].next[threadIdx.x]->tuple),
+                      16);
+
+        } else {
+          fsm[idx].state[threadIdx.x] = state_t::DONE;
+        }
+      }
+    }
+
+    // match stage
+    idx = match_virtual_id % STATE_NUM;
+    ++match_virtual_id;
+    if ((tid + stride * (match_virtual_id - 1) < s_n) &&
+        match_virtual_id >= 1) {
+      if (fsm[idx].state[threadIdx.x] == state_t::MATCH) {
+        pref.wait();
+        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM_2(idx, 0));
+        fsm[idx].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM_2(idx, 1));
+        if (r_tuple->k == fsm[idx].s_tuple[threadIdx.x].k) {
+          aggr_fn_local(r_tuple->v, fsm[idx].s_tuple[threadIdx.x].v,
+                        &aggr_local);
+        }
+        if (fsm[idx].next[threadIdx.x]) {
+          handle_interruption(fsm[idx].next[threadIdx.x],
+                              fsm[idx].s_tuple[threadIdx.x].k,
+                              fsm[idx].s_tuple[threadIdx.x].v, aggr_local);
+        }
+        fsm[idx].state[threadIdx.x] = state_t::DONE;
+      }
+    }
+    if (tid + stride * (match_virtual_id - 1) >= s_n) {
+      match_stage_finish_flag = true;
+    }
+  }
+  aggr_fn_global(aggr_local, o_aggr);
+}
+
 int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
          int32_t *s_payload, int32_t s_n, ConfigSPP cfg) {
   CHKERR(cudaDeviceReset());
@@ -400,6 +498,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       const int smeme_size = STATE_NUM * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
       probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
+                        stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
+    } else if (cfg.method == 3) {
+      const int smeme_size = STATE_NUM * cfg.probe_blocksize * 2 * sizeof(uint64_t);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe_ht_2_smem<<<cfg.probe_gridsize, cfg.probe_blocksize, smeme_size,
                         stream>>>(d_s, s_n, d_ht_slot, ht_size_log, d_aggr);
     } else {
       assert(0);
