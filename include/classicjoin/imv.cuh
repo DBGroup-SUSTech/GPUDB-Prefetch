@@ -431,7 +431,7 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
   // fully vectorized loops
   while (all_done < PDIST) {
     k = ((k == PDIST) ? 0 : k);
-    warp.sync();
+    // warp.sync();
 
     // transfer states
     state_t state = fsm[k].state[threadIdx.x];
@@ -450,7 +450,7 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
                         sizeof(EntryHeader));
           }
 
-          warp.sync();
+          // warp.sync();
 
           fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
           fsm[k].active[threadIdx.x] = active;
@@ -497,7 +497,7 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
             rvs.next[offset] = fsm[k].next[threadIdx.x];
           }
 
-          warp.sync();
+          // warp.sync();
 
           rvs_cnt += active_cnt;
 
@@ -516,7 +516,7 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
             fsm[k].next[threadIdx.x] = rvs.next[offset];
           }
 
-          warp.sync();
+          // warp.sync();
 
           rvs_cnt = remain_cnt;
 
@@ -525,7 +525,7 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
           fsm[k].active[threadIdx.x] = true;
         }
 
-        warp.sync();
+        // warp.sync();
 
         break;
       }
