@@ -14,7 +14,7 @@ TEST(unique, naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   // double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -22,8 +22,7 @@ TEST(unique, naive) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -81,7 +80,7 @@ TEST(unique, naive) {
 TEST(measure, DISABLED_naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -89,8 +88,7 @@ TEST(measure, DISABLED_naive) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -155,8 +153,7 @@ TEST(unique, amac) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -213,7 +210,7 @@ TEST(unique, imv) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   // double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -221,8 +218,7 @@ TEST(unique, imv) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -287,8 +283,7 @@ TEST(unique, gp) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -353,8 +348,7 @@ TEST(unique, spp) {
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_fk_from_pk(s_fname.c_str(), s_key, s_n,
-                                              r_key, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -411,7 +405,7 @@ TEST(skew_r_unique_s, naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -420,7 +414,7 @@ TEST(skew_r_unique_s, naive) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -479,7 +473,7 @@ TEST(skew_r_unique_s, imv) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -488,7 +482,7 @@ TEST(skew_r_unique_s, imv) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -545,7 +539,7 @@ TEST(skew_r_unique_s, amac) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -554,7 +548,7 @@ TEST(skew_r_unique_s, amac) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -611,7 +605,7 @@ TEST(skew_r_unique_s, gp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -620,7 +614,7 @@ TEST(skew_r_unique_s, gp) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -675,7 +669,7 @@ TEST(skew_r_unique_s, spp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -684,7 +678,7 @@ TEST(skew_r_unique_s, spp) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
