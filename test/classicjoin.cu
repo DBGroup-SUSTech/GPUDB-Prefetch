@@ -145,7 +145,7 @@ TEST(unique, amac) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   // double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -275,7 +275,7 @@ TEST(unique, gp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   // double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -340,7 +340,7 @@ TEST(unique, gp) {
 TEST(unique, spp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
   std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];

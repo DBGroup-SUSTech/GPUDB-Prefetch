@@ -53,6 +53,51 @@ __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
   }
 }
 
+__device__ __forceinline__ void get_cache(
+    int32_t key, int32_t &value, const Node *cached_root,
+    DynamicAllocator<ALLOC_CAPACITY> &node_allocator) {
+  NodePtr node_ptr;
+  const Node *node = cached_root;
+  while (node->type == Node::Type::INNER) {
+    // printf("node == inner\n");
+    const InnerNode *inner = static_cast<const InnerNode *>(node);
+    node_ptr = inner->children[inner->lower_bound(key)];
+    node = node_ptr.to_ptr<Node>(node_allocator);
+  }
+  const LeafNode *leaf = static_cast<const LeafNode *>(node);
+  int pos = leaf->lower_bound(key);
+  // printf("key = %d, leaf = %d\n", key, leaf->keys[pos]);
+  if (pos < leaf->n_key && key == leaf->keys[pos]) {
+    value = leaf->values[pos];
+  } else {
+    value = -1;
+  }
+  return;
+}
+__global__ void gets_parallel_cache(
+    int32_t *keys, int n, int32_t *values, const NodePtr *root_p,
+    DynamicAllocator<ALLOC_CAPACITY> node_allocator) {
+  int warpid = threadIdx.x / 32;
+  int warplane = threadIdx.x % 32;
+  if (warplane >= LANES_PER_WARP) return;
+
+  int lid = warpid * LANES_PER_WARP + warplane;  // lane id
+  int lanes_per_block = blockDim.x / 32 * LANES_PER_WARP;
+  int stride = lanes_per_block * gridDim.x;
+
+  __shared__ InnerNode root;
+  if (lanes_per_block * blockIdx.x + lid < n) {  // active block
+    if (threadIdx.x == 0) {
+      memcpy(&root, (*root_p).to_ptr<Node>(node_allocator), sizeof(InnerNode));
+    }
+    __syncthreads();
+  }
+
+  for (int i = lanes_per_block * blockIdx.x + lid; i < n; i += stride) {
+    get_cache(keys[i], values[i], &root, node_allocator);
+  }
+}
+
 void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
