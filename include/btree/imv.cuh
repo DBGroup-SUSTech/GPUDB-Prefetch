@@ -81,7 +81,7 @@ __launch_bounds__(128, 1)  //
                         (*root_p).to_ptr<InnerNode>(node_allocator));
           }
 
-          __syncwarp();
+          // __syncwarp();
 
           fsm[k].state[lid] = state_t::SEARCH;
           fsm[k].active[lid] = active;
@@ -107,19 +107,19 @@ __launch_bounds__(128, 1)  //
         if (inner_mask) {
           if (active) {
             // assert goes to same branch
-            assert(node->type == Node::Type::INNER);
+            // assert(node->type == Node::Type::INNER);
             auto inner = static_cast<const InnerNode *>(node);
             int pos = inner->lower_bound(fsm[k].key[lid]);
             pref.commit(&VSMEM_4(k),
                         inner->children[pos].to_ptr<InnerNode>(node_allocator));
           }
 
-          __syncwarp();
+          // __syncwarp();
 
           fsm[k].state[lid] = state_t::SEARCH;
         } else {
           if (active) {
-            assert(node->type == Node::Type::LEAF);
+            // assert(node->type == Node::Type::LEAF);
             auto leaf = static_cast<const LeafNode *>(node);
             auto key = fsm[k].key[lid];
             auto &value = values[fsm[k].i[lid]];
@@ -132,7 +132,7 @@ __launch_bounds__(128, 1)  //
             }
           }
 
-          __syncwarp();
+          // __syncwarp();
           fsm[k].state[lid] = state_t::INIT;
           fsm[k].active[lid] = false;
           --k;

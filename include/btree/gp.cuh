@@ -17,7 +17,7 @@ constexpr int LANES_PER_WARP = 8;
 // constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
 
 
-#define VSMEM(v, index) v[(index) * LANES_PER_BLOCK + lid]
+#define VSMEM_L(v, index) v[(index) * LANES_PER_BLOCK + lid]
 
 __shared__ InnerNode v[PDIST * LANES_PER_BLOCK];  // prefetch buffer
 __shared__ int32_t key[PDIST * LANES_PER_BLOCK];
@@ -42,15 +42,15 @@ __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
 
   prefetch_node_t pref{};
   for (int st = tid; st < n; st += stride * PDIST) { // group start position
-    pref.commit(&VSMEM(v, 0), (*root_p).to_ptr<InnerNode>(node_allocator));
+    pref.commit(&VSMEM_L(v, 0), (*root_p).to_ptr<InnerNode>(node_allocator));
     pref.wait();
     
     int G = min( (n - 1 - st) / stride + 1, PDIST );
 
     for (int k = 0; k < G; k ++) {
       if(k)
-        VSMEM(v, k) = VSMEM(v, 0);
-      VSMEM(key, k) = keys[st + k * stride];
+        VSMEM_L(v, k) = VSMEM_L(v, 0);
+      VSMEM_L(key, k) = keys[st + k * stride];
     }
 
     for (bool notFirst = false; ; notFirst = true) {
@@ -59,18 +59,18 @@ __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
         if (notFirst)
           pref.wait();
 
-        auto node = static_cast<const Node *> (&VSMEM(v, k));
+        auto node = static_cast<const Node *> (&VSMEM_L(v, k));
         if (node->type == Node::Type::INNER) {
           auto inner = static_cast<const InnerNode *>(node);
-          int pos = inner->lower_bound(VSMEM(key, k));
-          pref.commit(&VSMEM(v, k), inner->children[pos].to_ptr<InnerNode>(node_allocator));
+          int pos = inner->lower_bound(VSMEM_L(key, k));
+          pref.commit(&VSMEM_L(v, k), inner->children[pos].to_ptr<InnerNode>(node_allocator));
         } else {
           endFlag = true;
           auto leaf = static_cast<const LeafNode *>(node);
           auto &value = values[i];
 
-          int pos = leaf->lower_bound(VSMEM(key, k));
-          if (pos < leaf->n_key && VSMEM(key, k) == leaf->keys[pos]) {
+          int pos = leaf->lower_bound(VSMEM_L(key, k));
+          if (pos < leaf->n_key && VSMEM_L(key, k) == leaf->keys[pos]) {
             value = leaf->values[pos];
           } else {
             value = -1;
@@ -86,8 +86,6 @@ __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
 void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
   CHKERR(cudaDeviceReset());
   BTree tree;
-
-  printf("size: %d\n", sizeof(int));
 
   // input
   int32_t *d_keys = nullptr, *d_values = nullptr;

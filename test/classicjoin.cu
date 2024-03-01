@@ -1,3 +1,4 @@
+#include <fmt/core.h>
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
@@ -9,21 +10,19 @@
 #include "datagen/generator_ETHZ.cuh"
 #include "util/args.cuh"
 
-TEST(skew, naive) {
+TEST(unique, naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
+  // double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
-  assert(
-      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(
-      !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
+  assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -31,8 +30,8 @@ TEST(skew, naive) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -47,27 +46,27 @@ TEST(skew, naive) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  // int els_per_thread = 4;
-  // int threads_per_block = 512;
+  int els_per_thread = 4;
+  int threads_per_block = 256;
   classicjoin::Config config;
-  // { // build kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-  //   config.build_gridsize = blocks_per_grid;
-  //   config.build_blocksize = threads_per_block;
-  // }
-  // { // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  const int blocksize = args::get<int>("BSIZE");
-  const int gridsize = args::get<int>("GSIZE");
-  config.build_blocksize = blocksize;
-  config.build_gridsize = gridsize;
-  config.probe_blocksize = blocksize;
-  config.probe_gridsize = gridsize;
+  {  // build kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+    config.build_gridsize = blocks_per_grid;
+    config.build_blocksize = threads_per_block;
+  }
+  {  // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
+  //   const int blocksize = args::get<int>("BSIZE");
+  //   const int gridsize = args::get<int>("GSIZE");
+  //   config.build_blocksize = blocksize;
+  //   config.build_gridsize = gridsize;
+  //   config.probe_blocksize = blocksize;
+  //   config.probe_gridsize = gridsize;
 
   fmt::print(
       "Query:\n"
@@ -78,287 +77,18 @@ TEST(skew, naive) {
                                config));
 }
 
-TEST(skew, amac) {
+TEST(measure, DISABLED_naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
-  int32_t *r_key = new int32_t[r_n];
-  int32_t *s_key = new int32_t[s_n];
-
-  // generate key = [0..r_n]
-  assert(
-      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(
-      !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
-
-  fmt::print(
-      "Create relation R with {} tuples ({} MB) "
-      "using unique keys\n",
-      r_n, r_n * sizeof(int32_t) / 1024 / 1024);
-  fmt::print(
-      "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
-
-  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
-  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
-
-  int32_t *r_payload = new int32_t[r_n];
-  int32_t *s_payload = new int32_t[s_n];
-
-  // Payload set to equal with key
-  std::copy_n(r_key, r_n, r_payload);
-  std::copy_n(s_key, s_n, s_payload);
-
-  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
-
-  //   int els_per_thread = 4;
-  //   int threads_per_block = 512;
-  classicjoin::amac::ConfigAMAC config;
-  //   {  // build kernel
-  //     const int els_per_block = threads_per_block * els_per_thread;
-  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-  //     config.build_gridsize = blocks_per_grid;
-  //     config.build_blocksize = threads_per_block;
-  //   }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  config.build_blocksize = 128;
-  config.build_gridsize = 72 * 2;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 72 * 2;
-
-  fmt::print(
-      "Query:\n"
-      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
-      "Result:\n"
-      "\t{}\n",
-      classicjoin::amac::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
-                              config));
-}
-
-TEST(skew, imv) {
-  int32_t r_n = args::get<int32_t>("RN");
-  int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
-  int32_t *r_key = new int32_t[r_n];
-  int32_t *s_key = new int32_t[s_n];
-
-  // generate key = [0..r_n]
-  assert(
-      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(
-      !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
-
-  fmt::print(
-      "Create relation R with {} tuples ({} MB) "
-      "using unique keys\n",
-      r_n, r_n * sizeof(int32_t) / 1024 / 1024);
-  fmt::print(
-      "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
-
-  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
-  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
-
-  int32_t *r_payload = new int32_t[r_n];
-  int32_t *s_payload = new int32_t[s_n];
-
-  // Payload set to equal with key
-  std::copy_n(r_key, r_n, r_payload);
-  std::copy_n(s_key, s_n, s_payload);
-
-  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
-
-  //   const int threads_per_block = 128;
-  //   const int els_per_thread = 128;
-  classicjoin::imv::ConfigIMV config;
-  //   {  // build kernel
-  //     const int els_per_block = threads_per_block * els_per_thread;
-  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-  //     config.build_gridsize = blocks_per_grid;
-  //     config.build_blocksize = threads_per_block;
-  //   }
-  //   {  // probe kernel
-  //     const int els_per_block = threads_per_block * els_per_thread;
-  //     const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //     config.probe_gridsize = blocks_per_grid;
-  //     config.probe_blocksize = threads_per_block;
-  //   }
-  config.build_blocksize = 128;
-  config.build_gridsize = 72 * 2;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 72 * 4;
-
-  fmt::print(
-      "Query:\n"
-      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
-      "Result:\n"
-      "\t{}\n",
-      classicjoin::imv::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
-                             config));
-}
-
-TEST(skew, gp) {
-  int32_t r_n = args::get<int32_t>("RN");
-  int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
-  int32_t *r_key = new int32_t[r_n];
-  int32_t *s_key = new int32_t[s_n];
-
-  // generate key = [0..r_n]
-  assert(
-      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(
-      !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
-
-  fmt::print(
-      "Create relation R with {} tuples ({} MB) "
-      "using unique keys\n",
-      r_n, r_n * sizeof(int32_t) / 1024 / 1024);
-  fmt::print(
-      "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
-
-  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
-  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
-
-  int32_t *r_payload = new int32_t[r_n];
-  int32_t *s_payload = new int32_t[s_n];
-
-  // Payload set to equal with key
-  std::copy_n(r_key, r_n, r_payload);
-  std::copy_n(s_key, s_n, s_payload);
-
-  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
-
-  int els_per_thread = 64;
-  int threads_per_block = 128;
-  classicjoin::gp::ConfigGP config;
-  {  // build kernel
-    const int els_per_block = threads_per_block * els_per_thread;
-    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-    config.build_gridsize = blocks_per_grid;
-    config.build_blocksize = threads_per_block;
-  }
-  // {  // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  // config.build_blocksize = 256;
-  // config.build_gridsize = 100;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
-
-  fmt::print(
-      "Query:\n"
-      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
-      "Result:\n"
-      "\t{}\n",
-      classicjoin::gp::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
-                            config));
-}
-
-TEST(skew, spp) {
-  int32_t r_n = args::get<int32_t>("RN");
-  int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s", s_n, skew);
-  int32_t *r_key = new int32_t[r_n];
-  int32_t *s_key = new int32_t[s_n];
-
-  // generate key = [0..r_n]
-  assert(
-      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(
-      !datagen::create_relation_zipf(s_fname.c_str(), s_key, s_n, r_n, skew));
-
-  fmt::print(
-      "Create relation R with {} tuples ({} MB) "
-      "using unique keys\n",
-      r_n, r_n * sizeof(int32_t) / 1024 / 1024);
-  fmt::print(
-      "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
-
-  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
-  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
-
-  int32_t *r_payload = new int32_t[r_n];
-  int32_t *s_payload = new int32_t[s_n];
-
-  // Payload set to equal with key
-  std::copy_n(r_key, r_n, r_payload);
-  std::copy_n(s_key, s_n, s_payload);
-
-  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
-  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
-
-  int els_per_thread = 512;
-  int threads_per_block = 72;
-  classicjoin::spp::ConfigSPP config;
-  {  // build kernel
-    const int els_per_block = threads_per_block * els_per_thread;
-    const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
-    config.build_gridsize = blocks_per_grid;
-    config.build_blocksize = threads_per_block;
-  }
-  // { // probe kernel
-  //   const int els_per_block = threads_per_block * els_per_thread;
-  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
-  //   config.probe_gridsize = blocks_per_grid;
-  //   config.probe_blocksize = threads_per_block;
-  // }
-  //   config.build_blocksize = 256;
-  //   config.build_gridsize = 100;
-  config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
-
-  fmt::print(
-      "Query:\n"
-      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
-      "Result:\n"
-      "\t{}\n",
-      classicjoin::spp::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
-                             config));
-}
-
-TEST(unique, naive) {
-  int32_t r_n = args::get<int32_t>("RN");
-  int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -366,8 +96,8 @@ TEST(unique, naive) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -407,23 +137,23 @@ TEST(unique, naive) {
       "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
       "Result:\n"
       "\t{}\n",
-      classicjoin::naive::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
-                               config));
+      classicjoin::naive::join_measure(r_key, r_payload, r_n, s_key, s_payload,
+                                       s_n, config));
 }
 
 TEST(unique, amac) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  // double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -431,8 +161,8 @@ TEST(unique, amac) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -479,16 +209,16 @@ TEST(unique, amac) {
 TEST(unique, imv) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  // double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -496,8 +226,8 @@ TEST(unique, imv) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -544,16 +274,16 @@ TEST(unique, imv) {
 TEST(unique, gp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  // double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -561,8 +291,8 @@ TEST(unique, gp) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -595,7 +325,8 @@ TEST(unique, gp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
-  config.probe_gridsize = 72;
+  config.probe_gridsize = 72 * 2;
+  config.method = 2;
 
   fmt::print(
       "Query:\n"
@@ -606,19 +337,18 @@ TEST(unique, gp) {
                             config));
 }
 
-TEST(unique, DISABLED_spp) {
+TEST(unique, spp) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
-  double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
-  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, skew);
-  std::string s_fname = cutil::rel_fname(false, "s_uniq", s_n, skew);
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(true, "r_uniq", r_n, 0);
+  std::string s_fname = cutil::rel_fname(true, "s_uniq", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
   int32_t *s_key = new int32_t[s_n];
 
   // generate key = [0..r_n]
   assert(!datagen::create_relation_unique(r_fname.c_str(), r_key, r_n, r_n));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -626,8 +356,8 @@ TEST(unique, DISABLED_spp) {
       r_n, r_n * sizeof(int32_t) / 1024 / 1024);
   fmt::print(
       "Create relation S from R, with {} tuples ({} MB) "
-      "using zipf keys, skew = {}\n",
-      s_n, s_n * sizeof(int32_t) / 1024 / 1024, skew);
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
 
   // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
   // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
@@ -642,8 +372,8 @@ TEST(unique, DISABLED_spp) {
   // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
   // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
 
-  int els_per_thread = 512;
-  int threads_per_block = 128;
+  int els_per_thread = 4;
+  int threads_per_block = 256;
   classicjoin::spp::ConfigSPP config;
   {  // build kernel
     const int els_per_block = threads_per_block * els_per_thread;
@@ -660,10 +390,7 @@ TEST(unique, DISABLED_spp) {
   //   config.build_blocksize = 256;
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
-<<<<<<< HEAD
-  config.probe_gridsize = 72;
-=======
-  config.probe_gridsize = 128;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
@@ -678,7 +405,7 @@ TEST(skew_r_unique_s, naive) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -687,7 +414,7 @@ TEST(skew_r_unique_s, naive) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -732,7 +459,6 @@ TEST(skew_r_unique_s, naive) {
   //   config.build_gridsize = gridsize;
   //   config.probe_blocksize = blocksize;
   //   config.probe_gridsize = gridsize;
->>>>>>> master
 
   fmt::print(
       "Query:\n"
@@ -747,7 +473,7 @@ TEST(skew_r_unique_s, imv) {
   int32_t r_n = args::get<int32_t>("RN");
   int32_t s_n = args::get<int32_t>("SN");
   double skew = args::get<double>("SKEW");
-  assert(r_n <= s_n);
+  // assert(r_n <= s_n);
   std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
   std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
   int32_t *r_key = new int32_t[r_n];
@@ -756,7 +482,73 @@ TEST(skew_r_unique_s, imv) {
   // generate key = [0..r_n]
   assert(
       !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
-  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, r_n));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
+
+  fmt::print(
+      "Create relation R with {} tuples ({} MB) "
+      "using zipf keys, skew= {} \n",
+      r_n, r_n * sizeof(int32_t) / 1024 / 1024, skew);
+  fmt::print(
+      "Create relation S from R, with {} tuples ({} MB) "
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
+
+  //   fmt::print("R: {}\n", cutil::fmt_arr(r_key, r_n));
+  //   fmt::print("S: {}\n", cutil::fmt_arr(s_key, s_n));
+
+  int32_t *r_payload = new int32_t[r_n];
+  int32_t *s_payload = new int32_t[s_n];
+
+  // Payload set to equal with key
+  std::copy_n(r_key, r_n, r_payload);
+  std::copy_n(s_key, s_n, s_payload);
+
+  //   fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+  //   fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+
+  const int threads_per_block = 128;
+  const int els_per_thread = 1024;
+  classicjoin::imv::ConfigIMV config;
+  //   {  // build kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+  //     config.build_gridsize = blocks_per_grid;
+  //     config.build_blocksize = threads_per_block;
+  //   }
+  {  // probe kernel
+    const int els_per_block = threads_per_block * els_per_thread;
+    const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+    config.probe_gridsize = blocks_per_grid;
+    config.probe_blocksize = threads_per_block;
+  }
+  config.build_blocksize = 128;
+  config.build_gridsize = 72 * 2;
+  config.probe_blocksize = 128;
+  config.probe_gridsize = 72 * 2;
+
+  fmt::print(
+      "Query:\n"
+      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
+      "Result:\n"
+      "\t{}\n",
+      classicjoin::imv::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
+                             config));
+}
+
+TEST(skew_r_unique_s, amac) {
+  int32_t r_n = args::get<int32_t>("RN");
+  int32_t s_n = args::get<int32_t>("SN");
+  double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
+  std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
+  int32_t *r_key = new int32_t[r_n];
+  int32_t *s_key = new int32_t[s_n];
+
+  // generate key = [0..r_n]
+  assert(
+      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
 
   fmt::print(
       "Create relation R with {} tuples ({} MB) "
@@ -782,7 +574,7 @@ TEST(skew_r_unique_s, imv) {
 
   const int threads_per_block = 128;
   const int els_per_thread = 1024;
-  classicjoin::imv::ConfigIMV config;
+  classicjoin::amac::ConfigAMAC config;
   //   {  // build kernel
   //     const int els_per_block = threads_per_block * els_per_thread;
   //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
@@ -797,14 +589,142 @@ TEST(skew_r_unique_s, imv) {
   }
   config.build_blocksize = 128;
   config.build_gridsize = 72 * 2;
-  //   config.probe_blocksize = 128;
-  //   config.probe_gridsize = 72 * 4;
+  config.probe_blocksize = 128;
+  config.probe_gridsize = 72 * 2;
 
   fmt::print(
       "Query:\n"
       "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
       "Result:\n"
       "\t{}\n",
-      classicjoin::imv::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
+      classicjoin::amac::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
+                              config));
+}
+
+TEST(skew_r_unique_s, gp) {
+  int32_t r_n = args::get<int32_t>("RN");
+  int32_t s_n = args::get<int32_t>("SN");
+  double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
+  std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
+  int32_t *r_key = new int32_t[r_n];
+  int32_t *s_key = new int32_t[s_n];
+
+  // generate key = [0..r_n]
+  assert(
+      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
+
+  fmt::print(
+      "Create relation R with {} tuples ({} MB) "
+      "using zipf keys, skew= {} \n",
+      r_n, r_n * sizeof(int32_t) / 1024 / 1024, skew);
+  fmt::print(
+      "Create relation S from R, with {} tuples ({} MB) "
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
+
+  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
+  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
+
+  int32_t *r_payload = new int32_t[r_n];
+  int32_t *s_payload = new int32_t[s_n];
+
+  // Payload set to equal with key
+  std::copy_n(r_key, r_n, r_payload);
+  std::copy_n(s_key, s_n, s_payload);
+
+  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+
+  classicjoin::gp::ConfigGP config;
+  //   {  // build kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+  //     config.build_gridsize = blocks_per_grid;
+  //     config.build_blocksize = threads_per_block;
+  //   }
+  // { // probe kernel
+  //   const int els_per_block = threads_per_block * els_per_thread;
+  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+  //   config.probe_gridsize = blocks_per_grid;
+  //   config.probe_blocksize = threads_per_block;
+  // }
+  config.build_blocksize = 128;
+  config.build_gridsize = 72 * 2;
+  config.probe_blocksize = 128;
+  config.probe_gridsize = 144;
+
+  fmt::print(
+      "Query:\n"
+      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
+      "Result:\n"
+      "\t{}\n",
+      classicjoin::gp::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
+                            config));
+}
+
+TEST(skew_r_unique_s, spp) {
+  int32_t r_n = args::get<int32_t>("RN");
+  int32_t s_n = args::get<int32_t>("SN");
+  double skew = args::get<double>("SKEW");
+  // assert(r_n <= s_n);
+  std::string r_fname = cutil::rel_fname(false, "r", r_n, skew);
+  std::string s_fname = cutil::rel_fname(true, "s", s_n, 0);
+  int32_t *r_key = new int32_t[r_n];
+  int32_t *s_key = new int32_t[s_n];
+
+  // generate key = [0..r_n]
+  assert(
+      !datagen::create_relation_zipf(r_fname.c_str(), r_key, r_n, r_n, skew));
+  assert(!datagen::create_relation_unique(s_fname.c_str(), s_key, s_n, s_n));
+
+  fmt::print(
+      "Create relation R with {} tuples ({} MB) "
+      "using zipf keys, skew= {} \n",
+      r_n, r_n * sizeof(int32_t) / 1024 / 1024, skew);
+  fmt::print(
+      "Create relation S from R, with {} tuples ({} MB) "
+      "using unique keys\n",
+      s_n, s_n * sizeof(int32_t) / 1024 / 1024);
+
+  // fmt::print("R: {}\n", fmt_arr(r_key, r_n));
+  // fmt::print("S: {}\n", fmt_arr(s_key, s_n));
+
+  int32_t *r_payload = new int32_t[r_n];
+  int32_t *s_payload = new int32_t[s_n];
+
+  // Payload set to equal with key
+  std::copy_n(r_key, r_n, r_payload);
+  std::copy_n(s_key, s_n, s_payload);
+
+  // fmt::print("R payload: {}\n", cutil::fmt_arr(r_payload, 20));
+  // fmt::print("S payload: {}\n", cutil::fmt_arr(s_payload, 20));
+
+  classicjoin::spp::ConfigSPP config;
+  //   {  // build kernel
+  //     const int els_per_block = threads_per_block * els_per_thread;
+  //     const int blocks_per_grid = (r_n + els_per_block - 1) / els_per_block;
+  //     config.build_gridsize = blocks_per_grid;
+  //     config.build_blocksize = threads_per_block;
+  //   }
+  // { // probe kernel
+  //   const int els_per_block = threads_per_block * els_per_thread;
+  //   const int blocks_per_grid = (s_n + els_per_block - 1) / els_per_block;
+  //   config.probe_gridsize = blocks_per_grid;
+  //   config.probe_blocksize = threads_per_block;
+  // }
+  config.build_blocksize = 128;
+  config.build_gridsize = 72 * 2;
+  config.probe_blocksize = 128;
+  config.probe_gridsize = 72 * 2;
+
+  fmt::print(
+      "Query:\n"
+      "\tSELECT SUM(R.payload*S.payload) FROM R JOIN S\n"
+      "Result:\n"
+      "\t{}\n",
+      classicjoin::spp::join(r_key, r_payload, r_n, s_key, s_payload, s_n,
                              config));
 }

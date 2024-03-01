@@ -1,20 +1,20 @@
 #pragma once
 
-#include "classicjoin/common.cuh"
+#include "common.cuh"
 #include "util/util.cuh"
 
 namespace classicjoin {
 namespace amac {
 
 struct ConfigAMAC : public Config {
-  int method = 4;  // three prefetch methods
+  int method = 2;  // three prefetch methods
 };
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;                // prefetch distance & group size
+constexpr int PDIST = 8;               // prefetch distance & group size
 constexpr int THREADS_PER_BLOCK = 128;  // warps per thread
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
-
+#define VSMEMv2(v, index) v[index * blockDim.x + threadIdx.x]
 namespace build {
 
 enum class state_t : int {
@@ -148,9 +148,9 @@ struct fsm_shared_t {
 /// @param ht_size_log log2(htsize)
 /// @param entries     hash table entries
 /// @return
-__launch_bounds__(128, 1)  //
-    __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
-                               int ht_size_log, int *o_aggr) {
+// __launch_bounds__(128, 1)  //
+__global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
+                           int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
@@ -300,8 +300,73 @@ __launch_bounds__(128, 1)  //
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-__global__ void probe_ht_2(Tuple *s, int s_n, EntryHeader *ht_slot,
-                           int ht_size_log, int *o_aggr);
+// merge next phase and match phase
+__global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
+                                int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  __shared__ Entry v[THREADS_PER_BLOCK * PDIST];
+  __shared__ fsm_shared_t fsm[PDIST];
+  // printf("v = %p fsm = %p\n", v, fsm);
+  for (int k = 0; k < PDIST; ++k) fsm[k].state[threadIdx.x] = state_t::HASH;
+
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+  int aggr_local = 0;
+
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+    state_t state = fsm[k].state[threadIdx.x];
+    switch (state) {
+      case state_t::HASH: {
+        if (i < s_n) {
+          fsm[k].state[threadIdx.x] = state_t::NEXT;
+          fsm[k].s_tuple[threadIdx.x] = s[i];  // TODO: move to below
+          i += stride;
+          int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+          pref.commit(&(VSMEM(k).header), &ht_slot[hval], sizeof(EntryHeader));
+        } else {
+          fsm[k].state[threadIdx.x] = state_t::DONE;
+          ++all_done;
+        }
+        break;
+      }
+      case state_t::NEXT:
+      case state_t::MATCH: {
+        pref.wait();
+        Entry *entry = reinterpret_cast<Entry *>(&VSMEM(k));
+        if (state == state_t::MATCH) {
+          Tuple *r_tuple = &entry->tuple;
+          // TODO: Tuple s_tuple = fsm[k].s_tuple[threadIdx.x];
+          if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
+            aggr_fn_local(r_tuple->v,                     //
+                          fsm[k].s_tuple[threadIdx.x].v,  //
+                          &aggr_local);                   //
+          }
+        }
+        Entry *next = entry->header.next;
+        if (next) {
+          pref.commit(&VSMEM(k), next, sizeof(Entry));
+          fsm[k].state[threadIdx.x] = state_t::MATCH;
+        } else {
+          fsm[k].state[threadIdx.x] = state_t::HASH;
+          --k;
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+    ++k;
+  }
+  aggr_fn_global(aggr_local, o_aggr);
+}
 
 __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
                            int ht_size_log, int *o_aggr) {
@@ -426,7 +491,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cutil::DeviceAlloc(d_ht_slot, ht_size));
   CHKERR(cutil::DeviceAlloc(d_entries, ht_size));
   CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
-  CHKERR(cutil::DeviceSet(d_ht_slot, 0, ht_size));
+  CHKERR(cutil::DeviceSet(d_entries, 0, ht_size));
 
   int32_t *d_aggr;
   CHKERR(cutil::DeviceAlloc(d_aggr, 1));
@@ -454,8 +519,9 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   {
     CHKERR(
         cudaEventRecordWithFlags(start_build, stream, cudaEventRecordExternal));
-    build::build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
-        d_r, d_entries, r_n, d_ht_slot, ht_size_log);
+    build::
+        build_ht_naive<<<cfg.build_gridsize, cfg.build_blocksize, 0, stream>>>(
+            d_r, d_entries, r_n, d_ht_slot, ht_size_log);
     // const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
     // build::build_ht_prefetch<<<cfg.build_gridsize, cfg.build_blocksize,
     // smeme_size,
@@ -467,10 +533,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   }
 
   // print_ht_kernel<<<1, 1, 0, stream>>>(d_ht_slot, ht_size);
-
+  assert(THREADS_PER_BLOCK == cfg.probe_blocksize);
   {
     CHKERR(
         cudaEventRecordWithFlags(start_probe, stream, cudaEventRecordExternal));
+    fmt::print("method = {}\n", cfg.method);
     if (cfg.method == 1) {
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(uint64_t);
       fmt::print("smem_size = {}\n", smeme_size);
@@ -487,6 +554,12 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
       probe::probe_ht_1_smem<<<cfg.probe_gridsize, cfg.probe_blocksize,
                                smeme_size, stream>>>(d_s, s_n, d_ht_slot,
                                                      ht_size_log, d_aggr);
+    } else if (cfg.method == 2) {
+      const int smeme_size = PDIST * THREADS_PER_BLOCK * sizeof(Entry);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe::probe_ht_2stage<<<cfg.probe_gridsize, cfg.probe_blocksize, 0,
+                               stream>>>(d_s, s_n, d_ht_slot, ht_size_log,
+                                         d_aggr);
     } else {
       assert(0);
     }
