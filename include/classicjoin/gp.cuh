@@ -258,11 +258,9 @@ __launch_bounds__(128, 1) //
   fsm_t fsm[PDIST]{};
   prefetch_t pref{};
 
-  bool first_get_next = true;
   int aggr_local = 0;
 
   for (int i = tid; i < s_n; i += stride * PDIST) {
-    first_get_next = true;
     for (int j = 0; j < PDIST; j++) {
       int s_tuple_id = i + j * stride;
       if (s_tuple_id < s_n) {
@@ -273,6 +271,8 @@ __launch_bounds__(128, 1) //
         // prefetch
         pref.commit(&VSMEM_2(j, 1), &ht_slot[hval], 8);
         fsm[j].state = state_t::NEXT;
+      } else {
+        fsm[j].state = state_t::DONE;
       }
     }
 #pragma unroll
@@ -281,6 +281,7 @@ __launch_bounds__(128, 1) //
         pref.wait();
         fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
         if (!fsm[j].next) {
+          fsm[j].state = state_t::DONE;
           continue;
         }
         pref.commit(&VSMEM_2(j, 0), &(fsm[j].next->tuple), 16);
@@ -300,6 +301,7 @@ __launch_bounds__(128, 1) //
           handle_interruption(fsm[j].next, fsm[j].s_tuple.k, fsm[j].s_tuple.v,
                               aggr_local);
         }
+        fsm[j].state = state_t::DONE;
       }
     }
   }
