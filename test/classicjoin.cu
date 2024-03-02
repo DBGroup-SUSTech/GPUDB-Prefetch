@@ -326,7 +326,7 @@ TEST(unique, gp) {
   //   config.build_gridsize = 100;
   config.probe_blocksize = 128;
   config.probe_gridsize = 72 * 2;
-  config.method = 2;
+  config.method = 3;
 
   fmt::print(
       "Query:\n"

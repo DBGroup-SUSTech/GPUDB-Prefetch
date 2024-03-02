@@ -7,7 +7,7 @@ namespace classicjoin {
 namespace gp {
 
 struct ConfigGP : public Config {
-  int method = 2; // one prefetch methods
+  int method = 3; // one prefetch methods
 };
 
 // TODO: use prefetch in build_ht
@@ -223,6 +223,89 @@ __launch_bounds__(128, 1) //
   aggr_fn_global(aggr_local, o_aggr);
 }
 
+__device__ __forceinline__ void handle_interruption(Entry *next,
+                                                    const int &s_tuple_k,
+                                                    const int &s_tuple_v,
+                                                    int &aggr_local) {
+  while (next) {
+    Tuple r_tuple = next->tuple;
+    if (r_tuple.k == s_tuple_k) {
+      aggr_local += r_tuple.v * s_tuple_v;
+    }
+    next = next->header.next;
+  }
+}
+
+/// @brief
+/// @param s           S relation
+/// @param s_n         number of S items
+/// @param ht_slot     header of chains
+/// @param ht_size_log log2(htsize)
+/// @param entries     hash table entries
+/// @return
+__launch_bounds__(128, 1) //
+    __global__
+    void probe_ht_3_registers(Tuple *s, int s_n, EntryHeader *ht_slot,
+                              int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+
+  extern __shared__ uint64_t v[]; // prefetch buffer
+
+  fsm_t fsm[PDIST]{};
+  prefetch_t pref{};
+
+  bool first_get_next = true;
+  int aggr_local = 0;
+
+  for (int i = tid; i < s_n; i += stride * PDIST) {
+    first_get_next = true;
+    for (int j = 0; j < PDIST; j++) {
+      int s_tuple_id = i + j * stride;
+      if (s_tuple_id < s_n) {
+        fsm[j].state = state_t::HASH;
+        fsm[j].s_tuple = s[s_tuple_id];
+        // hash
+        int hval = fsm[j].s_tuple.k & ht_mask;
+        // prefetch
+        pref.commit(&VSMEM_2(j, 1), &ht_slot[hval], 8);
+        fsm[j].state = state_t::NEXT;
+      }
+    }
+#pragma unroll
+    for (int j = 0; j < PDIST; j++) {
+      if (fsm[j].state == state_t::NEXT) {
+        pref.wait();
+        fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
+        if (!fsm[j].next) {
+          continue;
+        }
+        pref.commit(&VSMEM_2(j, 0), &(fsm[j].next->tuple), 16);
+        fsm[j].state = state_t::MATCH;
+      }
+    }
+#pragma unroll
+    for (int j = 0; j < PDIST; j++) {
+      if (fsm[j].state == state_t::MATCH) {
+        pref.wait();
+        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM_2(j, 0));
+        fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
+        if (r_tuple->k == fsm[j].s_tuple.k) {
+          aggr_fn_local(r_tuple->v, fsm[j].s_tuple.v, &aggr_local);
+        }
+        if (fsm[j].next) {
+          handle_interruption(fsm[j].next, fsm[j].s_tuple.k, fsm[j].s_tuple.v,
+                              aggr_local);
+        }
+      }
+    }
+  }
+  aggr_fn_global(aggr_local, o_aggr);
+}
+
 /// @brief
 /// @param s           S relation
 /// @param s_n         number of S items
@@ -382,6 +465,13 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
                                                    ht_size_log, d_aggr);
 
     } else if (cfg.method == 3) {
+      const int smeme_size = PDIST * cfg.probe_blocksize * 2 * sizeof(uint64_t);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe_ht_3_registers<<<cfg.probe_gridsize, cfg.probe_blocksize,
+                             smeme_size, stream>>>(d_s, s_n, d_ht_slot,
+                                                   ht_size_log, d_aggr);
+
+    } else if (cfg.method == 4) {
       const int smeme_size =
           PDIST * cfg.probe_blocksize * 2 * sizeof(uint64_t) +
           THREADS_PER_BLOCK * PDIST;
