@@ -2,12 +2,13 @@
 
 #include "classicjoin/common.cuh"
 #include "util/util.cuh"
+#include <cstring>
 
 namespace classicjoin {
 namespace gp {
 
 struct ConfigGP : public Config {
-  int method = 3; // one prefetch methods
+  int method = 2; // one prefetch methods
 };
 
 // TODO: use prefetch in build_ht
@@ -163,12 +164,11 @@ __launch_bounds__(128, 1) //
   fsm_t fsm[PDIST]{};
   prefetch_t pref{};
 
-  bool first_get_next = true;
+  bool finish_match = true;
   int aggr_local = 0;
 
   for (int i = tid; i < s_n; i += stride * PDIST) {
-    int finish_match_num = 0;
-    first_get_next = true;
+#pragma unroll
     for (int j = 0; j < PDIST; j++) {
       int s_tuple_id = i + j * stride;
       if (s_tuple_id < s_n) {
@@ -179,41 +179,38 @@ __launch_bounds__(128, 1) //
         // prefetch
         pref.commit(&VSMEM_2(j, 1), &ht_slot[hval], 8);
         fsm[j].state = state_t::NEXT;
-      } else {
-        finish_match_num++;
+      }else {
+        fsm[j].state = state_t::DONE;
       }
     }
-    while (finish_match_num != PDIST) {
 #pragma unroll
-      for (int j = 0; j < PDIST; j++) {
-        if (fsm[j].state == state_t::NEXT) {
-          if (first_get_next) {
-            pref.wait();
-            fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
-            if (!fsm[j].next) {
-              finish_match_num++;
-              fsm[j].state = state_t::DONE;
-              continue;
-            }
-          }
-          pref.commit(&VSMEM_2(j, 0), &(fsm[j].next->tuple), 16);
-          fsm[j].state = state_t::MATCH;
+    for (int j = 0; j < PDIST; j++) {
+      if (fsm[j].state == state_t::NEXT) {
+        pref.wait();
+        fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
+        if (!fsm[j].next) {
+          fsm[j].state = state_t::DONE;
+          continue;
         }
+        pref.commit(&VSMEM_2(j, 0), &(fsm[j].next->tuple), 16);
+        fsm[j].state = state_t::MATCH;
       }
-      first_get_next = false;
+    }
 #pragma unroll
-      for (int j = 0; j < PDIST; j++) {
-        if (fsm[j].state == state_t::MATCH) {
-          pref.wait();
+    for (int j = 0; j < PDIST; j++) {
+      if (fsm[j].state == state_t::MATCH) {
+        finish_match = false;
+        pref.wait();
+        while (!finish_match) {
           Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM_2(j, 0));
           fsm[j].next = reinterpret_cast<Entry *>(VSMEM_2(j, 1));
           if (r_tuple->k == fsm[j].s_tuple.k) {
             aggr_fn_local(r_tuple->v, fsm[j].s_tuple.v, &aggr_local);
           }
           if (fsm[j].next) {
-            fsm[j].state = state_t::NEXT;
+            memcpy(&VSMEM_2(j, 0), &(fsm[j].next->tuple), 16);
           } else {
-            finish_match_num++;
+            finish_match = true;
             fsm[j].state = state_t::DONE;
           }
         }
