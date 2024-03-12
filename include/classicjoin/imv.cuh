@@ -157,8 +157,15 @@ enum class state_t : int {
   DONE = 4
 };
 
-struct fsm_t {
+struct fsm_t_1 {
   unsigned long s_tuple; // 8 Byte
+  Entry *next;           // 8 Byte
+  state_t state;         // 4 Byte
+  bool active;
+};
+
+struct fsm_t_2 {
+  Tuple s_tuple; // 8 Byte
   Entry *next;   // 8 Byte
   state_t state; // 4 Byte
   bool active;
@@ -558,8 +565,8 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-__global__ void probe_ht_2stage_regs(Tuple *s, int s_n, EntryHeader *ht_slot,
-                                     int ht_size_log, int *o_aggr) {
+__global__ void probe_ht_2stage_regs_1(Tuple *s, int s_n, EntryHeader *ht_slot,
+                                       int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
   int ht_mask = ht_size - 1;
 
@@ -586,7 +593,7 @@ __global__ void probe_ht_2stage_regs(Tuple *s, int s_n, EntryHeader *ht_slot,
 
   __shared__ Entry v[THREADS_PER_BLOCK * PDIST]; // prefetch buffer
 
-  fsm_t rvs_reg;
+  fsm_t_1 rvs_reg;
 
   int8_t rvs_cnt = 0; // number of active lanes in rvs
 
@@ -693,8 +700,10 @@ __global__ void probe_ht_2stage_regs(Tuple *s, int s_n, EntryHeader *ht_slot,
         Entry *tmp_next = (Entry *)__shfl_sync(
             MASK_ALL_LANES, (unsigned long)rvs_reg.next, offset);
         if (!active) {
-          fsm[k].s_tuple[threadIdx.x].k = static_cast<int32_t>(tmp_s_tuple >> 32);
-          fsm[k].s_tuple[threadIdx.x].v = static_cast<int32_t>(tmp_s_tuple & 0xFFFFFFFF);
+          fsm[k].s_tuple[threadIdx.x].k =
+              static_cast<int32_t>(tmp_s_tuple >> 32);
+          fsm[k].s_tuple[threadIdx.x].v =
+              static_cast<int32_t>(tmp_s_tuple & 0xFFFFFFFF);
           fsm[k].next[threadIdx.x] = tmp_next;
         }
         rvs_cnt = remain_cnt;
@@ -729,7 +738,191 @@ __global__ void probe_ht_2stage_regs(Tuple *s, int s_n, EntryHeader *ht_slot,
       assert(next);
       Tuple r_tuple = next->tuple;
       if (r_tuple.k == static_cast<int32_t>(s_tuple >> 32)) {
-        aggr_fn_local(r_tuple.v, static_cast<int32_t>(s_tuple & 0xFFFFFFFF), &aggr_local);
+        aggr_fn_local(r_tuple.v, static_cast<int32_t>(s_tuple & 0xFFFFFFFF),
+                      &aggr_local);
+      }
+      next = next->header.next;
+    }
+  }
+
+  aggr_fn_global(aggr_local, o_aggr);
+}
+
+__global__ void probe_ht_2stage_regs_2(Tuple *s, int s_n, EntryHeader *ht_slot,
+                                       int ht_size_log, int *o_aggr) {
+  int ht_size = 1 << ht_size_log;
+  int ht_mask = ht_size - 1;
+
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  int i = tid;
+
+  assert(blockDim.x == THREADS_PER_BLOCK);
+
+  cg::thread_block_tile<32> warp =
+      cg::tiled_partition<32>(cg::this_thread_block());
+
+  // warp info
+  unsigned warpid = threadIdx.x / 32;
+  unsigned warplane = threadIdx.x % 32;
+  unsigned prefixlanes = 0xffffffff >> (32 - warplane);
+
+  // shared memory data for IMV
+  __shared__ probe::fsm_shared_t fsm[PDIST]; // states
+  for (int k = 0; k < PDIST; ++k)
+    fsm[k].state[threadIdx.x] = probe::state_t::HASH;
+
+  // __shared__ probe::fsm_shared_t rvs; // RVS in IMV paper
+
+  __shared__ Entry v[THREADS_PER_BLOCK * PDIST]; // prefetch buffer
+
+  fsm_t_2 rvs_reg;
+
+  int8_t rvs_cnt = 0; // number of active lanes in rvs
+
+  // prefetch primitives from AMAC
+  prefetch_t pref{};
+  int all_done = 0, k = 0;
+
+  // output
+  int aggr_local = 0;
+
+  // fully vectorized loops
+  while (all_done < PDIST) {
+    k = ((k == PDIST) ? 0 : k);
+    // warp.sync();
+
+    // transfer states
+    state_t state = fsm[k].state[threadIdx.x];
+    switch (state) {
+    case state_t::HASH: {
+      bool active = (i < s_n);
+      int active_mask = __ballot_sync(MASK_ALL_LANES, active);
+
+      if (active_mask) {
+        if (active) {
+          fsm[k].s_tuple[threadIdx.x] = s[i];
+          i += stride;
+          int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+
+          pref.commit(&(VSMEM(k).header), &ht_slot[hval], sizeof(EntryHeader));
+        }
+
+        // warp.sync();
+
+        fsm[k].state[threadIdx.x] = probe::state_t::NEXT;
+        fsm[k].active[threadIdx.x] = active;
+
+      } else {
+        fsm[k].state[threadIdx.x] = probe::state_t::DONE;
+        ++all_done;
+      }
+
+      break;
+    }
+
+    case state_t::MATCH:
+    case state_t::NEXT: {
+      bool active = fsm[k].active[threadIdx.x];
+
+      // MATCH
+      if (active) {
+        pref.wait();
+        Entry *entry = reinterpret_cast<Entry *>(&VSMEM(k));
+        if (state == state_t::MATCH) {
+          Tuple *r_tuple = &entry->tuple;
+          if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
+            aggr_fn_local(r_tuple->v,                    //
+                          fsm[k].s_tuple[threadIdx.x].v, //
+                          &aggr_local);                  //
+          }
+        }
+        Entry *next = entry->header.next;
+        fsm[k].next[threadIdx.x] = next;
+        active = (next != 0);
+      }
+
+      // integration
+      int active_mask = __ballot_sync(MASK_ALL_LANES, active);
+      int active_cnt = __popc(active_mask);
+
+      int32_t fsm_s_tuple_k = fsm[k].s_tuple[threadIdx.x].k;
+      int32_t fsm_s_tuple_v = fsm[k].s_tuple[threadIdx.x].v;
+      Entry *fsm_k_next = fsm[k].next[threadIdx.x];
+
+      // TODO: optimize with shfl_sync
+      if (active_cnt + rvs_cnt < 32) { // empty
+        int offset = warplane - rvs_cnt;
+        int src_lane = __fns(active_mask, 0, offset + 1);
+        int32_t tmp_s_tuple_k =
+            __shfl_sync(MASK_ALL_LANES, fsm_s_tuple_k, src_lane);
+        int32_t tmp_s_tuple_v =
+            __shfl_sync(MASK_ALL_LANES, fsm_s_tuple_v, src_lane);
+        Entry *tmp_next = (Entry *)__shfl_sync(
+            MASK_ALL_LANES, (unsigned long)fsm_k_next, src_lane);
+
+        if (warplane >= rvs_cnt) {
+          rvs_reg.s_tuple.k = tmp_s_tuple_k;
+          rvs_reg.s_tuple.v = tmp_s_tuple_v;
+          rvs_reg.next = (Entry *)tmp_next;
+        }
+
+        rvs_cnt += active_cnt;
+
+        // empty, switch to hash
+        fsm[k].state[threadIdx.x] = probe::state_t::HASH;
+        fsm[k].active[threadIdx.x] = false;
+        --k;
+
+      } else { // full
+        int inactive_mask = ~active_mask;
+        int prefix_cnt = __popc(inactive_mask & prefixlanes);
+        int remain_cnt = rvs_cnt + active_cnt - 32;
+        int offset = remain_cnt + prefix_cnt;
+        int32_t tmp_s_tuple_k =
+            __shfl_sync(MASK_ALL_LANES, rvs_reg.s_tuple.k, offset);
+        int32_t tmp_s_tuple_v =
+            __shfl_sync(MASK_ALL_LANES, rvs_reg.s_tuple.v, offset);
+        Entry *tmp_next = (Entry *)__shfl_sync(
+            MASK_ALL_LANES, (unsigned long)rvs_reg.next, offset);
+        if (!active) {
+          fsm[k].s_tuple[threadIdx.x].k = tmp_s_tuple_k;
+          fsm[k].s_tuple[threadIdx.x].v = tmp_s_tuple_v;
+          fsm[k].next[threadIdx.x] = tmp_next;
+        }
+        rvs_cnt = remain_cnt;
+
+        // warp.sync();
+
+        pref.commit(&VSMEM(k), fsm[k].next[threadIdx.x], sizeof(Entry));
+        fsm[k].state[threadIdx.x] = probe::state_t::MATCH;
+        fsm[k].active[threadIdx.x] = true;
+      }
+
+      // warp.sync();
+
+      break;
+    }
+
+    default:
+      break;
+    }
+    ++k;
+  }
+
+  /// @note without warp.sync() there will be errors
+  warp.sync();
+
+  // handle RVS
+  if (warplane < rvs_cnt) {
+    Tuple s_tuple = rvs_reg.s_tuple;
+    Entry *next = rvs_reg.next;
+
+    while (next) {
+      assert(next);
+      Tuple r_tuple = next->tuple;
+      if (r_tuple.k == s_tuple.k) {
+        aggr_fn_local(r_tuple.v, s_tuple.v, &aggr_local);
       }
       next = next->header.next;
     }
@@ -833,9 +1026,15 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
     } else if (cfg.method == 3) {
       const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(Entry);
       fmt::print("smem_size = {}\n", smeme_size);
-      probe::probe_ht_2stage_regs<<<cfg.probe_gridsize, cfg.probe_blocksize, 0,
-                                    stream>>>(d_s, s_n, d_ht_slot, ht_size_log,
-                                              d_aggr);
+      probe::probe_ht_2stage_regs_1<<<cfg.probe_gridsize, cfg.probe_blocksize,
+                                      0, stream>>>(d_s, s_n, d_ht_slot,
+                                                   ht_size_log, d_aggr);
+    } else if (cfg.method == 4) {
+      const int smeme_size = PDIST * cfg.probe_blocksize * sizeof(Entry);
+      fmt::print("smem_size = {}\n", smeme_size);
+      probe::probe_ht_2stage_regs_2<<<cfg.probe_gridsize, cfg.probe_blocksize,
+                                      0, stream>>>(d_s, s_n, d_ht_slot,
+                                                   ht_size_log, d_aggr);
     } else {
       assert(0);
     }
