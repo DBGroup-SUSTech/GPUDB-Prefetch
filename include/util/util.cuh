@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <fmt/format.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -98,6 +99,11 @@ namespace cutil {
 std::string rel_fname(bool unique, const char *rel, int32_t n, double skew) {
   std::string flag = unique ? "unique" : "nonunique";
   return fmt::format("data/{}_{}_{}_{}.bin", flag, rel, skew, n);
+}
+
+std::string rel_fname(bool unique, const char *rel, int32_t n, double skew, int32_t maxid) {
+  std::string flag = unique ? "unique" : "nonunique";
+  return fmt::format("data/{}_{}_{}_{}_{}.bin", flag, rel, skew, n, maxid);
 }
 
 template <typename T, typename N>
