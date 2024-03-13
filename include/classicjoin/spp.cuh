@@ -522,7 +522,7 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   col_to_row(s_key, s_payload, s, s_n);
 
   CHKERR(cutil::DeviceAlloc(d_r, r_n));
-  CHKERR(cutil::DeviceAlloc(d_s, r_n));
+  CHKERR(cutil::DeviceAlloc(d_s, s_n));
   CHKERR(cutil::CpyHostToDevice(d_r, r, r_n));
   CHKERR(cutil::CpyHostToDevice(d_s, s, s_n));
 

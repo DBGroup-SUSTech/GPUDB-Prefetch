@@ -10,11 +10,12 @@ All credit to the original author: Cagri Balkesen <cagri.balkesen@inf.ethz.ch>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fmt/core.h>
 
 #include "datagen/generator_ETHZ.cuh"
 namespace datagen {
 #define RAND_RANGE(N) ((double)rand() / ((double)RAND_MAX + 1) * (N))
-#define RAND_RANGE48(N, STATE) \
+#define RAND_RANGE48(N, STATE)                                                 \
   ((double)nrand48(STATE) / ((double)RAND_MAX + 1) * (N))
 
 static int seeded = 0;
@@ -40,7 +41,8 @@ int readFromFile(const char *filename, int *relation, uint64_t num_tuples) {
   sprintf(path, "%s", filename);
   FILE *fp = fopen(path, "rb");
 
-  if (!fp) return 1;
+  if (!fp)
+    return 1;
 
   printf("Reading file %s ", path);
   fflush(stdout);
@@ -61,7 +63,8 @@ int readFromFile(const char *filename, int *relation, uint64_t num_tuples) {
 static int writeToFile(const char *filename, int *relation,
                        uint64_t num_tuples) {
   FILE *fp = fopen(filename, "wb");
-  if (!fp) return 1;
+  if (!fp)
+    return 1;
 
   fwrite(relation, sizeof(int), num_tuples, fp);
   fclose(fp);
@@ -147,27 +150,48 @@ void random_gen(int *rel, uint64_t elsNum, const int64_t maxid) {
  * Create random unique keys starting from firstkey
  */
 void random_unique_gen(int *rel, uint64_t elsNum, const int64_t maxid) {
-  uint64_t i;
+  if (elsNum == maxid) {
+    uint64_t i;
+    uint64_t firstkey = 0;
+    /* for randomly seeding nrand48() */
+    unsigned short state[3] = {0, 0, 0};
+    unsigned int seed = time(NULL);
+    memcpy(state, &seed, sizeof(seed));
+    /* loop and distribute elements from [firstkey, maxid], so it might not be
+     * unique */
+    for (i = 0; i < elsNum; i++) {
+      rel[i] = firstkey;
 
-  uint64_t firstkey = 0;
+      if (firstkey == maxid)
+        firstkey = 0;
 
-  /* for randomly seeding nrand48() */
-  unsigned short state[3] = {0, 0, 0};
-  unsigned int seed = time(NULL);
-  memcpy(state, &seed, sizeof(seed));
+      firstkey++;
+    }
+    /* randomly shuffle elements */
+    knuth_shuffle48(rel, elsNum, state);
+  }else {
+    int *tmp = new int32_t[maxid];
+    uint64_t i;
+    uint64_t firstkey = 0;
+    /* for randomly seeding nrand48() */
+    unsigned short state[3] = {0, 0, 0};
+    unsigned int seed = time(NULL);
+    memcpy(state, &seed, sizeof(seed));
+    /* loop and distribute elements from [firstkey, maxid], so it might not be
+     * unique */
+    for (i = 0; i < maxid; i++) {
+      tmp[i] = firstkey;
 
-  /* loop and distribute elements from [firstkey, maxid], so it might not be
-   * unique */
-  for (i = 0; i < elsNum; i++) {
-    rel[i] = firstkey;
+      if (firstkey == maxid)
+        firstkey = 0;
 
-    if (firstkey == maxid) firstkey = 0;
-
-    firstkey++;
+      firstkey++;
+    }    
+    /* randomly shuffle elements */
+    knuth_shuffle48(tmp, maxid, state);
+    memcpy(rel, tmp, sizeof(int32_t) * elsNum);
+    delete []tmp;
   }
-
-  /* randomly shuffle elements */
-  knuth_shuffle48(rel, elsNum, state);
 }
 
 /**
@@ -388,4 +412,4 @@ void gen_zipf(uint64_t stream_size, unsigned int alphabet_size,
   free(alphabet);
 }
 
-}  // namespace datagen
+} // namespace datagen
