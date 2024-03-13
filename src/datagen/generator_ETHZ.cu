@@ -92,6 +92,7 @@ int create_relation_unique(const char *filename, int *relation,
   /*first try to read from a file*/
   // TODO donot read from file
   if (readFromFile(filename, relation, num_tuples)) {
+    check_seed();
     random_unique_gen(relation, num_tuples, maxid);
     return writeToFile(filename, relation, num_tuples);
   }
@@ -155,7 +156,7 @@ void random_unique_gen(int *rel, uint64_t elsNum, const int64_t maxid) {
     uint64_t firstkey = 0;
     /* for randomly seeding nrand48() */
     unsigned short state[3] = {0, 0, 0};
-    unsigned int seed = time(NULL);
+    unsigned int seed = seedValue++;
     memcpy(state, &seed, sizeof(seed));
     /* loop and distribute elements from [firstkey, maxid], so it might not be
      * unique */
@@ -169,13 +170,13 @@ void random_unique_gen(int *rel, uint64_t elsNum, const int64_t maxid) {
     }
     /* randomly shuffle elements */
     knuth_shuffle48(rel, elsNum, state);
-  }else {
+  } else {
     int *tmp = new int32_t[maxid];
     uint64_t i;
     uint64_t firstkey = 0;
     /* for randomly seeding nrand48() */
     unsigned short state[3] = {0, 0, 0};
-    unsigned int seed = time(NULL);
+    unsigned int seed = seedValue++;
     memcpy(state, &seed, sizeof(seed));
     /* loop and distribute elements from [firstkey, maxid], so it might not be
      * unique */
@@ -186,11 +187,11 @@ void random_unique_gen(int *rel, uint64_t elsNum, const int64_t maxid) {
         firstkey = 0;
 
       firstkey++;
-    }    
+    }
     /* randomly shuffle elements */
     knuth_shuffle48(tmp, maxid, state);
     memcpy(rel, tmp, sizeof(int32_t) * elsNum);
-    delete []tmp;
+    delete[] tmp;
   }
 }
 
