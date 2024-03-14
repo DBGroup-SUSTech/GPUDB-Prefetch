@@ -77,13 +77,16 @@ struct Node {
   }
 };
 
+#define COMMON_PDIST 2
+#define MACRO_MAX_ENTRIES 14
+#define MACRO_BLOCKSIZE 128
+// TODO: the best case of MAX_ENTRIES for naive is >= 16
+
 struct InnerNode : public Node {
-  static const int MAX_ENTRIES =
-      14;  // TODO: the best case of MAX_ENTRIES for naive is >= 16
+  static const int MAX_ENTRIES = MACRO_MAX_ENTRIES;
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;
-
   int32_t keys[MAX_ENTRIES];
   NodePtr children[MAX_ENTRIES];
 
@@ -149,7 +152,7 @@ struct InnerNode : public Node {
 };
 
 struct LeafNode : public Node {
-  static const int MAX_ENTRIES = 14;
+  static const int MAX_ENTRIES = MACRO_MAX_ENTRIES;
   static_assert(MAX_ENTRIES % 2 == 0);
 
   int n_key;

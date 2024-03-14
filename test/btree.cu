@@ -82,6 +82,7 @@ TEST(unique, gp) {
   fmt::print("Insert and Lookup {} tuples into BTree\n", n);
 }
 
+
 TEST(unique, spp) {
   int32_t n = args::get<int32_t>("N");
   std::string key_fname = cutil::rel_fname(true, "key_uniq", n, 0);
@@ -144,7 +145,9 @@ TEST(unique, spp) {
   config.probe_blocksize = threads_per_block;
   btree::spp::index(keys, values, n, config);
   fmt::print("Insert and Lookup {} tuples into BTree\n", n);
-}*/
+}
+
+*/
 
 TEST(unique, amac) {
   int32_t n = args::get<int32_t>("N");
