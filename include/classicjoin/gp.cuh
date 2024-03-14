@@ -1,6 +1,7 @@
 #pragma once
 
 #include "classicjoin/common.cuh"
+#include "classicjoin/config.cuh"
 #include "util/util.cuh"
 #include <cstring>
 
@@ -39,9 +40,9 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
 }
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;               // prefetch distance & group size
-constexpr int PADDING = 1;             // solve bank conflict
-constexpr int THREADS_PER_BLOCK = 128; // threads per block
+constexpr int PDIST = PDIST_CONFIG::PDIST; // prefetch distance & group size
+constexpr int PADDING = 1;                 // solve bank conflict
+constexpr int THREADS_PER_BLOCK = 128;     // threads per block
 #define VSMEM_1(index) v[index * blockDim.x + threadIdx.x]
 #define VSMEM_2(index, offset)                                                 \
   v[2 * (index * blockDim.x + threadIdx.x) + offset]
@@ -179,7 +180,7 @@ __launch_bounds__(128, 1) //
         // prefetch
         pref.commit(&VSMEM_2(j, 1), &ht_slot[hval], 8);
         fsm[j].state = state_t::NEXT;
-      }else {
+      } else {
         fsm[j].state = state_t::DONE;
       }
     }

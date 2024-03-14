@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "classicjoin/common.cuh"
+#include "classicjoin/config.cuh"
 #include "util/util.cuh"
 
 namespace cg = cooperative_groups;
@@ -15,7 +16,7 @@ struct ConfigIMV : public Config {
 };
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8; // prefetch distance & group size
+constexpr int PDIST = PDIST_CONFIG::PDIST; // prefetch distance & group size
 constexpr int WARPS_PER_BLOCK = 4;
 constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * 32; // warps per thread
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]

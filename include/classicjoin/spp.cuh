@@ -1,6 +1,7 @@
 #pragma once
 
 #include "classicjoin/common.cuh"
+#include "classicjoin/config.cuh"
 #include "util/util.cuh"
 
 namespace classicjoin {
@@ -38,9 +39,8 @@ __global__ void build_ht(Tuple *r, Entry *entries, int r_n,
 }
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;             // prefetch distance & group size
 constexpr int K = 2;                 // the number of code stage (0,1, ...K)
-constexpr int D = 4;                 // iteration distance
+constexpr int D = PDIST_CONFIG::D;   // iteration distance
 constexpr int STATE_NUM = K * D + 1; // state number
 // constexpr int PROBE_NUM = 512;
 constexpr int PADDING = 1;             // solve bank conflict

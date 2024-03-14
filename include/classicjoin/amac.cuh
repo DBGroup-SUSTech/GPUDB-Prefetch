@@ -1,5 +1,6 @@
 #pragma once
 
+#include "classicjoin/config.cuh"
 #include "common.cuh"
 #include "util/util.cuh"
 
@@ -7,12 +8,12 @@ namespace classicjoin {
 namespace amac {
 
 struct ConfigAMAC : public Config {
-  int method = 2;  // three prefetch methods
+  int method = 2; // three prefetch methods
 };
 
 // for prefetch  ---------------------------------------------------------
-constexpr int PDIST = 8;               // prefetch distance & group size
-constexpr int THREADS_PER_BLOCK = 128;  // warps per thread
+constexpr int PDIST = PDIST_CONFIG::PDIST; // prefetch distance & group size
+constexpr int THREADS_PER_BLOCK = 128;     // warps per thread
 #define VSMEM(index) v[index * blockDim.x + threadIdx.x]
 #define VSMEMv2(v, index) v[index * blockDim.x + threadIdx.x]
 namespace build {
@@ -78,41 +79,41 @@ __global__ void build_ht_prefetch(Tuple *r, Entry *entries, int r_n,
   while (all_done < PDIST) {
     k = ((k == PDIST) ? 0 : k);
     switch (fsm[k].state[threadIdx.x]) {
-      case state_t::HASH: {
-        if (i < r_n) {
-          fsm[k].r_tuple[threadIdx.x] = r[i];
-          fsm[k].entry[threadIdx.x] = &entries[i];
-          i += stride;
-          int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
-          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
-          fsm[k].state[threadIdx.x] = state_t::INSERT;
-        } else {
-          fsm[k].state[threadIdx.x] = state_t::DONE;
-          ++all_done;
-        }
-        break;
-      }
-
-      case state_t::INSERT: {
-        pref.wait();
-        auto entry = fsm[k].entry[threadIdx.x];
+    case state_t::HASH: {
+      if (i < r_n) {
+        fsm[k].r_tuple[threadIdx.x] = r[i];
+        fsm[k].entry[threadIdx.x] = &entries[i];
+        i += stride;
         int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
-        auto last = gutil::atomic_exch_64(&ht_slot[hval].next, entry);
-        entry->tuple = fsm[k].r_tuple[threadIdx.x];
-        entry->header.next = last;
-        fsm[k].state[threadIdx.x] = build::state_t::HASH;
-        --k;  // TODO
-        break;
+        pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+        fsm[k].state[threadIdx.x] = state_t::INSERT;
+      } else {
+        fsm[k].state[threadIdx.x] = state_t::DONE;
+        ++all_done;
       }
+      break;
+    }
 
-      default:
-        break;
+    case state_t::INSERT: {
+      pref.wait();
+      auto entry = fsm[k].entry[threadIdx.x];
+      int hval = fsm[k].r_tuple[threadIdx.x].k & ht_mask;
+      auto last = gutil::atomic_exch_64(&ht_slot[hval].next, entry);
+      entry->tuple = fsm[k].r_tuple[threadIdx.x];
+      entry->header.next = last;
+      fsm[k].state[threadIdx.x] = build::state_t::HASH;
+      --k; // TODO
+      break;
+    }
+
+    default:
+      break;
     }
     ++k;
   }
 }
 
-}  // namespace build
+} // namespace build
 
 namespace probe {
 
@@ -122,17 +123,17 @@ namespace probe {
 // 2. two status, prefetch the whole entry
 // 3. two status, prefetch entryheader, directly access body
 enum class state_t : int {
-  HASH = 0,   // get new tuple, prefetch Next
-  NEXT = 1,   // get Next*, prefetch Entry.tuple
-  MATCH = 2,  // get Entry.tuple, prefetch Entry.Header
+  HASH = 0,  // get new tuple, prefetch Next
+  NEXT = 1,  // get Next*, prefetch Entry.tuple
+  MATCH = 2, // get Entry.tuple, prefetch Entry.Header
 
   DONE = 4
 };
 
 struct fsm_t {
-  Tuple s_tuple;  // 8 Byte
-  Entry *next;    // 8 Byte
-  state_t state;  // 4 Byte
+  Tuple s_tuple; // 8 Byte
+  Entry *next;   // 8 Byte
+  state_t state; // 4 Byte
 };
 
 struct fsm_shared_t {
@@ -158,7 +159,7 @@ __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
   int stride = blockDim.x * gridDim.x;
   int i = tid;
 
-  extern __shared__ uint64_t v[];  // prefetch buffer
+  extern __shared__ uint64_t v[]; // prefetch buffer
 
   fsm_t fsm[PDIST]{};
   prefetch_t pref{};
@@ -170,52 +171,52 @@ __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
     k = ((k == PDIST) ? 0 : k);
 
     switch (fsm[k].state) {
-      case state_t::HASH: {
-        if (i < s_n) {
-          fsm[k].state = state_t::NEXT;
-
-          fsm[k].s_tuple = s[i];
-          i += stride;
-          int hval = fsm[k].s_tuple.k & ht_mask;
-          // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
-          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
-
-        } else {
-          fsm[k].state = state_t::DONE;
-          ++all_done;
-        }
-
-        break;
-      }
-
-      case state_t::NEXT: {
-        pref.wait();
-        fsm[k].next = reinterpret_cast<Entry *>(VSMEM(k));
-        if (fsm[k].next) {
-          fsm[k].state = state_t::MATCH;
-          pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
-
-        } else {
-          fsm[k].state = state_t::HASH;
-          --k;  // fill it with new item, or the bandwidth may be underutilized
-        }
-
-        break;
-      }
-
-      case state_t::MATCH: {
-        pref.wait();
-        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
-
-        if (r_tuple->k == fsm[k].s_tuple.k) {
-          aggr_fn_local(r_tuple->v, fsm[k].s_tuple.v, &aggr_local);
-        }
-
+    case state_t::HASH: {
+      if (i < s_n) {
         fsm[k].state = state_t::NEXT;
-        pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
 
-        break;
+        fsm[k].s_tuple = s[i];
+        i += stride;
+        int hval = fsm[k].s_tuple.k & ht_mask;
+        // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
+        pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+
+      } else {
+        fsm[k].state = state_t::DONE;
+        ++all_done;
       }
+
+      break;
+    }
+
+    case state_t::NEXT: {
+      pref.wait();
+      fsm[k].next = reinterpret_cast<Entry *>(VSMEM(k));
+      if (fsm[k].next) {
+        fsm[k].state = state_t::MATCH;
+        pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
+
+      } else {
+        fsm[k].state = state_t::HASH;
+        --k; // fill it with new item, or the bandwidth may be underutilized
+      }
+
+      break;
+    }
+
+    case state_t::MATCH: {
+      pref.wait();
+      Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
+
+      if (r_tuple->k == fsm[k].s_tuple.k) {
+        aggr_fn_local(r_tuple->v, fsm[k].s_tuple.v, &aggr_local);
+      }
+
+      fsm[k].state = state_t::NEXT;
+      pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
+
+      break;
+    }
     }
     ++k;
   }
@@ -223,7 +224,7 @@ __global__ void probe_ht_1(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-__launch_bounds__(128, 1)  //
+__launch_bounds__(128, 1) //
     __global__ void probe_ht_1_smem(Tuple *s, int s_n, EntryHeader *ht_slot,
                                     int ht_size_log, int *o_aggr) {
   int ht_size = 1 << ht_size_log;
@@ -233,10 +234,11 @@ __launch_bounds__(128, 1)  //
   int stride = blockDim.x * gridDim.x;
   int i = tid;
 
-  extern __shared__ uint64_t v[];  // prefetch buffer
+  extern __shared__ uint64_t v[]; // prefetch buffer
 
   __shared__ fsm_shared_t fsm[PDIST];
-  for (int k = 0; k < PDIST; ++k) fsm[k].state[threadIdx.x] = state_t::HASH;
+  for (int k = 0; k < PDIST; ++k)
+    fsm[k].state[threadIdx.x] = state_t::HASH;
 
   prefetch_t pref{};
   int all_done = 0, k = 0;
@@ -247,52 +249,52 @@ __launch_bounds__(128, 1)  //
     k = ((k == PDIST) ? 0 : k);
 
     switch (fsm[k].state[threadIdx.x]) {
-      case state_t::HASH: {
-        if (i < s_n) {
-          fsm[k].state[threadIdx.x] = state_t::NEXT;
-
-          fsm[k].s_tuple[threadIdx.x] = s[i];
-          i += stride;
-          int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
-          // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
-          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
-
-        } else {
-          fsm[k].state[threadIdx.x] = state_t::DONE;
-          ++all_done;
-        }
-
-        break;
-      }
-
-      case state_t::NEXT: {
-        pref.wait();
-        fsm[k].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(k));
-        if (fsm[k].next[threadIdx.x]) {
-          fsm[k].state[threadIdx.x] = state_t::MATCH;
-          pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8);
-
-        } else {
-          fsm[k].state[threadIdx.x] = state_t::HASH;
-          --k;  // fill it with new item, or the bandwidth may be underutilized
-        }
-
-        break;
-      }
-
-      case state_t::MATCH: {
-        pref.wait();
-        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
-
-        if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
-          aggr_fn_local(r_tuple->v, fsm[k].s_tuple[threadIdx.x].v, &aggr_local);
-        }
-
+    case state_t::HASH: {
+      if (i < s_n) {
         fsm[k].state[threadIdx.x] = state_t::NEXT;
-        pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
 
-        break;
+        fsm[k].s_tuple[threadIdx.x] = s[i];
+        i += stride;
+        int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+        // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
+        pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+
+      } else {
+        fsm[k].state[threadIdx.x] = state_t::DONE;
+        ++all_done;
       }
+
+      break;
+    }
+
+    case state_t::NEXT: {
+      pref.wait();
+      fsm[k].next[threadIdx.x] = reinterpret_cast<Entry *>(VSMEM(k));
+      if (fsm[k].next[threadIdx.x]) {
+        fsm[k].state[threadIdx.x] = state_t::MATCH;
+        pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->tuple), 8);
+
+      } else {
+        fsm[k].state[threadIdx.x] = state_t::HASH;
+        --k; // fill it with new item, or the bandwidth may be underutilized
+      }
+
+      break;
+    }
+
+    case state_t::MATCH: {
+      pref.wait();
+      Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
+
+      if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
+        aggr_fn_local(r_tuple->v, fsm[k].s_tuple[threadIdx.x].v, &aggr_local);
+      }
+
+      fsm[k].state[threadIdx.x] = state_t::NEXT;
+      pref.commit(&VSMEM(k), &(fsm[k].next[threadIdx.x]->header), 8);
+
+      break;
+    }
     }
     ++k;
   }
@@ -313,7 +315,8 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
   __shared__ Entry v[THREADS_PER_BLOCK * PDIST];
   __shared__ fsm_shared_t fsm[PDIST];
   // printf("v = %p fsm = %p\n", v, fsm);
-  for (int k = 0; k < PDIST; ++k) fsm[k].state[threadIdx.x] = state_t::HASH;
+  for (int k = 0; k < PDIST; ++k)
+    fsm[k].state[threadIdx.x] = state_t::HASH;
 
   prefetch_t pref{};
   int all_done = 0, k = 0;
@@ -323,45 +326,45 @@ __global__ void probe_ht_2stage(Tuple *s, int s_n, EntryHeader *ht_slot,
     k = ((k == PDIST) ? 0 : k);
     state_t state = fsm[k].state[threadIdx.x];
     switch (state) {
-      case state_t::HASH: {
-        if (i < s_n) {
-          fsm[k].state[threadIdx.x] = state_t::NEXT;
-          fsm[k].s_tuple[threadIdx.x] = s[i];  // TODO: move to below
-          i += stride;
-          int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
-          pref.commit(&(VSMEM(k).header), &ht_slot[hval], sizeof(EntryHeader));
-        } else {
-          fsm[k].state[threadIdx.x] = state_t::DONE;
-          ++all_done;
-        }
-        break;
+    case state_t::HASH: {
+      if (i < s_n) {
+        fsm[k].state[threadIdx.x] = state_t::NEXT;
+        fsm[k].s_tuple[threadIdx.x] = s[i]; // TODO: move to below
+        i += stride;
+        int hval = fsm[k].s_tuple[threadIdx.x].k & ht_mask;
+        pref.commit(&(VSMEM(k).header), &ht_slot[hval], sizeof(EntryHeader));
+      } else {
+        fsm[k].state[threadIdx.x] = state_t::DONE;
+        ++all_done;
       }
-      case state_t::NEXT:
-      case state_t::MATCH: {
-        pref.wait();
-        Entry *entry = reinterpret_cast<Entry *>(&VSMEM(k));
-        if (state == state_t::MATCH) {
-          Tuple *r_tuple = &entry->tuple;
-          // TODO: Tuple s_tuple = fsm[k].s_tuple[threadIdx.x];
-          if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
-            aggr_fn_local(r_tuple->v,                     //
-                          fsm[k].s_tuple[threadIdx.x].v,  //
-                          &aggr_local);                   //
-          }
+      break;
+    }
+    case state_t::NEXT:
+    case state_t::MATCH: {
+      pref.wait();
+      Entry *entry = reinterpret_cast<Entry *>(&VSMEM(k));
+      if (state == state_t::MATCH) {
+        Tuple *r_tuple = &entry->tuple;
+        // TODO: Tuple s_tuple = fsm[k].s_tuple[threadIdx.x];
+        if (r_tuple->k == fsm[k].s_tuple[threadIdx.x].k) {
+          aggr_fn_local(r_tuple->v,                    //
+                        fsm[k].s_tuple[threadIdx.x].v, //
+                        &aggr_local);                  //
         }
-        Entry *next = entry->header.next;
-        if (next) {
-          pref.commit(&VSMEM(k), next, sizeof(Entry));
-          fsm[k].state[threadIdx.x] = state_t::MATCH;
-        } else {
-          fsm[k].state[threadIdx.x] = state_t::HASH;
-          --k;
-        }
-        break;
       }
+      Entry *next = entry->header.next;
+      if (next) {
+        pref.commit(&VSMEM(k), next, sizeof(Entry));
+        fsm[k].state[threadIdx.x] = state_t::MATCH;
+      } else {
+        fsm[k].state[threadIdx.x] = state_t::HASH;
+        --k;
+      }
+      break;
+    }
 
-      default:
-        break;
+    default:
+      break;
     }
     ++k;
   }
@@ -377,7 +380,7 @@ __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
   int stride = blockDim.x * gridDim.x;
   int i = tid;
 
-  extern __shared__ uint64_t v[];  // prefetch buffer
+  extern __shared__ uint64_t v[]; // prefetch buffer
 
   fsm_t fsm[PDIST]{};
   prefetch_t pref{};
@@ -389,63 +392,63 @@ __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
     k = ((k == PDIST) ? 0 : k);
 
     switch (fsm[k].state) {
-      case state_t::HASH: {
-        if (i < s_n) {
-          fsm[k].state = state_t::NEXT;
+    case state_t::HASH: {
+      if (i < s_n) {
+        fsm[k].state = state_t::NEXT;
 
-          fsm[k].s_tuple = s[i];
-          i += stride;
-          int hval = fsm[k].s_tuple.k & ht_mask;
-          // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
-          pref.commit(&VSMEM(k), &ht_slot[hval], 8);
+        fsm[k].s_tuple = s[i];
+        i += stride;
+        int hval = fsm[k].s_tuple.k & ht_mask;
+        // pref.commit(&VSMEM(k), &(ht_slot[hval].next), 8);
+        pref.commit(&VSMEM(k), &ht_slot[hval], 8);
 
-        } else {
-          fsm[k].state = state_t::DONE;
-          ++all_done;
-        }
-
-        break;
+      } else {
+        fsm[k].state = state_t::DONE;
+        ++all_done;
       }
 
-      case state_t::NEXT: {
-        pref.wait();
-        fsm[k].next = reinterpret_cast<Entry *>(VSMEM(k));
-        if (fsm[k].next) {
-          fsm[k].state = state_t::MATCH;
-          pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
+      break;
+    }
 
-        } else {
-          fsm[k].state = state_t::HASH;
-          --k;  // fill it with new item, or the bandwidth may be underutilized
-        }
+    case state_t::NEXT: {
+      pref.wait();
+      fsm[k].next = reinterpret_cast<Entry *>(VSMEM(k));
+      if (fsm[k].next) {
+        fsm[k].state = state_t::MATCH;
+        pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
 
-        break;
+      } else {
+        fsm[k].state = state_t::HASH;
+        --k; // fill it with new item, or the bandwidth may be underutilized
       }
 
-      case state_t::MATCH: {
-        pref.wait();
-        Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
+      break;
+    }
 
-        if (r_tuple->k == fsm[k].s_tuple.k) {
-          aggr_fn_local(r_tuple->v, fsm[k].s_tuple.v, &aggr_local);
-        }
+    case state_t::MATCH: {
+      pref.wait();
+      Tuple *r_tuple = reinterpret_cast<Tuple *>(&VSMEM(k));
 
-        // DO NOT PREFTECH
-        fsm[k].next = fsm[k].next->header.next;  // should already in cache
-
-        if (fsm[k].next) {
-          fsm[k].state = state_t::MATCH;
-          pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
-        } else {
-          fsm[k].state = state_t::HASH;
-          --k;
-        }
-
-        // fsm[k].state = state_t::NEXT;
-        // pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
-
-        break;
+      if (r_tuple->k == fsm[k].s_tuple.k) {
+        aggr_fn_local(r_tuple->v, fsm[k].s_tuple.v, &aggr_local);
       }
+
+      // DO NOT PREFTECH
+      fsm[k].next = fsm[k].next->header.next; // should already in cache
+
+      if (fsm[k].next) {
+        fsm[k].state = state_t::MATCH;
+        pref.commit(&VSMEM(k), &(fsm[k].next->tuple), 8);
+      } else {
+        fsm[k].state = state_t::HASH;
+        --k;
+      }
+
+      // fsm[k].state = state_t::NEXT;
+      // pref.commit(&VSMEM(k), &(fsm[k].next->header), 8);
+
+      break;
+    }
     }
     ++k;
   }
@@ -453,7 +456,7 @@ __global__ void probe_ht_3(Tuple *s, int s_n, EntryHeader *ht_slot,
   aggr_fn_global(aggr_local, o_aggr);
 }
 
-}  // namespace probe
+} // namespace probe
 
 // __global__ void print_ht_kernel(EntryHeader *ht_slot, int n) {
 //   for (int i = 0; i < n; ++i) {
@@ -509,12 +512,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
 
   CHKERR(cudaStreamCreate(&stream));
   CHKERR(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  fmt::print(
-      "use method {}\n"
-      "Build: {} blocks * {} threads\n"
-      "Probe: {} blocks * {} threads\n",
-      cfg.method, cfg.build_gridsize, cfg.build_blocksize, cfg.probe_gridsize,
-      cfg.probe_blocksize);
+  fmt::print("use method {}\n"
+             "Build: {} blocks * {} threads\n"
+             "Probe: {} blocks * {} threads\n",
+             cfg.method, cfg.build_gridsize, cfg.build_blocksize,
+             cfg.probe_gridsize, cfg.probe_blocksize);
 
   {
     CHKERR(
@@ -576,12 +578,11 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   CHKERR(cudaEventElapsedTime(&ms_build, start_build, end_build));
   CHKERR(cudaEventElapsedTime(&ms_probe, start_probe, end_probe));
 
-  fmt::print(
-      "Join AMAC (bucket size = 1)\n"
-      "[build(R), {} ms, {} tps (S)]\n"
-      "[probe(S), {} ms, {} tps (R)]\n",
-      ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
-      s_n * 1.0 / ms_probe * 1000);
+  fmt::print("Join AMAC (bucket size = 1)\n"
+             "[build(R), {} ms, {} tps (S)]\n"
+             "[probe(S), {} ms, {} tps (R)]\n",
+             ms_build, r_n * 1.0 / ms_build * 1000, ms_probe,
+             s_n * 1.0 / ms_probe * 1000);
 
   int32_t aggr;
   CHKERR(cutil::CpyDeviceToHost(&aggr, d_aggr, 1));
@@ -591,6 +592,6 @@ int join(int32_t *r_key, int32_t *r_payload, int32_t r_n, int32_t *s_key,
   return aggr;
 }
 
-}  // namespace amac
+} // namespace amac
 
-}  // namespace classicjoin
+} // namespace classicjoin
