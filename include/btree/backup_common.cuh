@@ -92,7 +92,6 @@ struct InnerNode : public Node {
   NodePtr children[MAX_ENTRIES];
 
   __device__ __forceinline__ bool is_full() const {
-    
     return n_key == MAX_ENTRIES - 1;
   }
 

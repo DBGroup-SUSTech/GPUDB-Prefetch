@@ -1,6 +1,9 @@
 #include "util/util.cuh"
 
-#define ALLOC_CAPACITY ((uint64_t(1) << 34))  // 16GB for node
+// #define ALLOC_CAPACITY ((uint64_t(1) << 34))  // 16GB for node
+
+#define ALLOC_CAPACITY ((uint64_t(1) << 34))
+
 
 template <typename T, uint64_t CAPACITY>
 class ObjAllocator {

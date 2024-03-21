@@ -1,3 +1,5 @@
+
+
 #pragma once
 #include <assert.h>
 #include <cuda_pipeline_primitives.h>
@@ -11,7 +13,7 @@ namespace btree {
 namespace gp {
 
 constexpr int PDIST = COMMON_PDIST;
-constexpr int LANES_PER_WARP = 8;
+constexpr int LANES_PER_WARP = COMMON_LPW;
 constexpr int LANES_PER_BLOCK = MACRO_BLOCKSIZE / 32 * LANES_PER_WARP;
 
 // constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
@@ -161,7 +163,6 @@ void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
 }
 }  // namespace naive
 }  // namespace btree
-
 
 
 //-----------------------------------------------------------------------------------------

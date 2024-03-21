@@ -12,7 +12,7 @@
 
 namespace btree {
 namespace naive {
-constexpr int LANES_PER_WARP = 8;  // or 8
+constexpr int LANES_PER_WARP = COMMON_LPW;  // or 8
 
 __device__ __forceinline__ void get(
     int32_t key, int32_t &value, const NodePtr root_ptr,

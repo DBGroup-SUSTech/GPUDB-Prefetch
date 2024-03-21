@@ -1,5 +1,6 @@
 {
   "files.associations": {
+    "*.cuh": "cuda-cpp",
     "random": "cpp",
     "queue": "cpp",
     "stack": "cpp",
@@ -7,7 +8,11 @@
     "cstdint": "cpp",
     "chrono": "cpp",
     "algorithm": "cpp",
-    "memory": "cpp"
+    "memory": "cpp",
+    "compare": "cpp",
+    "ranges": "cpp",
+    "variant": "cpp"
   },
-  "C_Cpp.clang_format_fallbackStyle": "Google"
+  "C_Cpp.clang_format_fallbackStyle": "Google",
+  "C_Cpp.errorSquiggles": "disabled"
 }

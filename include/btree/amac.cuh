@@ -52,7 +52,7 @@ struct fsm_t {
 // for method 4 ------------------------------
 constexpr int PDIST_4 = COMMON_PDIST; // 8
 constexpr int THREADS_PER_BLOCK_4 = MACRO_BLOCKSIZE;  // method 4
-constexpr int LANES_PER_WARP = 8;  // or 8
+constexpr int LANES_PER_WARP = COMMON_LPW;  // or 8
 constexpr int LANES_PER_BLOCK = THREADS_PER_BLOCK_4 / 32 * LANES_PER_WARP;
 constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
 #define VSMEM_4(index) v[index * LANES_PER_BLOCK + lid]

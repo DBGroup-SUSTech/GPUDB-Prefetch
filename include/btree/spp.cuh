@@ -22,7 +22,7 @@ namespace spp {
 // fanout = 10, code path = 12, alloc_cap = 1<<34
 // fanout = 8, code path = 14, alloc_cap = 1<<34
 
-#define SPP(x) (x >= 16 ? 9 : (x >= 14 ? 10 : (x >= 10 ? 12 : 14)))
+#define SPP(x) (x >= 16 ? 10 : (x >= 14 ? 10 : (x >= 10 ? 12 : 14)))
 
 constexpr int STAGE = SPP(MACRO_MAX_ENTRIES);  // Max code path length, assume <= 10
 constexpr int LANES_PER_WARP = 8;
@@ -62,6 +62,16 @@ __global__ void gets_parallel(int32_t *keys, int n, int32_t *values,
   // iteration 2: code 0 for i = 1, code 1 for i = 0
   // ...
   int finished = 0;
+
+  // Node *tmp = static_cast<Node *>(&root);
+  // int h = 0;
+  // while (tmp->type == Node::Type::INNER) {
+  //   auto inner = static_cast<InnerNode *>(tmp);
+  //   tmp = *(inner->children[0].to_ptr<InnerNode *>(node_allocator));
+  //   h ++;
+  // }
+
+  // printf("h = %d\n", h);
   for (int i = 0; ; i ++) {
     if (finished == G) break;
     for (int j = i >= G ? G - 1 : i; j >= 0; j--) {
@@ -176,7 +186,6 @@ void index(int32_t *keys, int32_t *values, int32_t n, Config cfg) {
 }
 }  // namespace spp
 }  // namespace btree
-
 
 ///-------------------------------------------------------------
 

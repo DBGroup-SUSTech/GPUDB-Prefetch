@@ -9,7 +9,7 @@ namespace btree {
 namespace imv {
 constexpr int PDIST_4 = COMMON_PDIST;
 constexpr int THREADS_PER_BLOCK_4 = MACRO_BLOCKSIZE;  // method 4
-constexpr int LANES_PER_WARP = 8;  // or 8
+constexpr int LANES_PER_WARP = COMMON_LPW;  // or 8
 constexpr int LANES_PER_BLOCK = THREADS_PER_BLOCK_4 / 32 * LANES_PER_WARP;
 constexpr int WARPS_PER_BLOCK = LANES_PER_BLOCK / LANES_PER_WARP;
 constexpr unsigned MASK_ALL_LANES = 0xFFFFFFFF;
