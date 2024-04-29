@@ -4,10 +4,8 @@
 
 | | Naive | GP \[1\]| SPP \[1\]| AMAC \[2\]| IMV \[3\]|
 |:---:|:---:|:---:| :---:| :---:| :---:|
-| Hash Join Probe | ✅ | 🔨 | 🔨 | ✅ | ✅ |
-| Hash Join Build | ✅ |  |  |  |  |
-| BTree Lookup    | ✅ | 🔨 | 🔨 | ✅ | 🔨 |
-| BTree Insert    | ✅ | |  |  |  |
+| Hash Join Probe | ✅ | ✅ | ✅  | ✅ | ✅ |
+| BTree Lookup    | ✅ | ✅ | ✅  | ✅ | ✅  |
 
 ## Workload Description
 
@@ -17,7 +15,6 @@
 * Non-partitioned and non-unique hash join with early materialization.
 * Staticaly pre-allocated hash table entries.
 * Uniform distribution (`--gtest_filter="unique.*"`) and skew distribution (`--gtest_filter="skew.*"`)
-* Row-format input tables.
 
 ### BTree
 
