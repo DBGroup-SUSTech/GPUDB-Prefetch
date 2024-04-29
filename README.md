@@ -1,4 +1,4 @@
-# Revisiting Prefetch of Query Processing on GPU
+# Software Prefetching on GPU Query Processing
 
 ## Progress
 
